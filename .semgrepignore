@@ -1,0 +1,22 @@
+# Exclude test files from security scanning (not production code)
+**/*.spec.ts
+**/*.spec.tsx
+**/*.test.ts
+**/*.test.tsx
+
+# Exclude test directories
+**/test/**
+**/tests/**
+**/__tests__/**
+
+# Exclude documentation
+**/docs/**
+
+# Exclude configuration and build files
+**/.husky/**
+**/dist/**
+**/build/**
+**/node_modules/**
+
+# Exclude TypeScript declaration files
+**/*.d.ts

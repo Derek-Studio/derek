@@ -1,0 +1,108 @@
+{
+	"name": "nanocoder-vscode",
+	"displayName": "Nanocoder",
+	"description": "VS Code integration for Nanocoder - local-first AI coding assistant",
+	"version": "0.3.0",
+	"publisher": "nanocollective",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Nano-Collective/nanocoder.git"
+	},
+	"engines": {
+		"vscode": "^1.85.0"
+	},
+	"categories": [
+		"Programming Languages",
+		"Machine Learning",
+		"Other"
+	],
+	"keywords": [
+		"ai",
+		"coding",
+		"assistant",
+		"nanocoder",
+		"ollama",
+		"local"
+	],
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"main": "./dist/extension.js",
+	"icon": "media/icon.png",
+	"contributes": {
+		"commands": [
+			{
+				"command": "nanocoder.connect",
+				"title": "Connect to Nanocoder",
+				"category": "Nanocoder"
+			},
+			{
+				"command": "nanocoder.disconnect",
+				"title": "Disconnect from Nanocoder",
+				"category": "Nanocoder"
+			},
+			{
+				"command": "nanocoder.startCli",
+				"title": "Start Nanocoder CLI",
+				"category": "Nanocoder"
+			},
+			{
+				"command": "nanocoder.askAboutCode",
+				"title": "Ask Nanocoder about this",
+				"category": "Nanocoder"
+			}
+		],
+		"menus": {
+			"editor/context": [
+				{
+					"command": "nanocoder.askAboutCode",
+					"when": "editorHasSelection",
+					"group": "nanocoder"
+				}
+			]
+		},
+		"configuration": {
+			"title": "Nanocoder",
+			"properties": {
+				"nanocoder.serverPort": {
+					"type": "number",
+					"default": 51820,
+					"description": "WebSocket server port for communication with Nanocoder CLI"
+				},
+				"nanocoder.autoConnect": {
+					"type": "boolean",
+					"default": true,
+					"description": "Automatically connect to Nanocoder CLI on startup"
+				},
+				"nanocoder.autoStartCli": {
+					"type": "boolean",
+					"default": false,
+					"description": "Automatically start Nanocoder CLI if not running"
+				},
+				"nanocoder.showDiffPreview": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show diff preview before applying file changes"
+				}
+			}
+		}
+	},
+	"scripts": {
+		"vscode:prepublish": "pnpm run build",
+		"build": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --minify",
+		"watch": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --watch",
+		"lint": "eslint src --ext ts"
+	},
+	"devDependencies": {
+		"@types/node": "^25.0.3",
+		"@types/vscode": "^1.85.0",
+		"@types/ws": "^8.5.10",
+		"@vscode/vsce": "^3.7.0",
+		"esbuild": "^0.28.0",
+		"eslint": "^10.1.0",
+		"typescript": "^5.3.0"
+	},
+	"dependencies": {
+		"ws": "^8.16.0"
+	}
+}

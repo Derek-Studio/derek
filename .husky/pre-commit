@@ -1,0 +1,49 @@
+#!/usr/bin/env sh
+
+# Cross-platform pre-commit hook for husky
+# This script ensures pnpm is available and runs lint-staged across different platforms
+
+# Determine if we're on Windows (Git Bash) or Unix-like system
+if [ -n "$WINDIR" ] || [ -n "$MSYSTEM" ]; then
+    # Windows environment (Git Bash)
+    PLATFORM="windows"
+    # Use Windows-style path detection
+    if [ -n "$LOCALAPPDATA" ]; then
+        PNPM_WIN_PATH="$LOCALAPPDATA\\pnpm"
+    fi
+else
+    # Unix-like system (Linux, macOS)
+    PLATFORM="unix"
+fi
+
+# Try to load nvm if it exists (cross-platform)
+if [ "$PLATFORM" = "unix" ]; then
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+elif [ "$PLATFORM" = "windows" ]; then
+    # On Windows, nvm-windows might be used, but shell sourcing is different
+    if [ -n "$APPDATA" ] && [ -f "$APPDATA\\nvm\\nvm.sh" ]; then
+        export NVM_DIR="$APPDATA\\nvm"
+    fi
+fi
+
+# Add common pnpm installation paths (cross-platform)
+if [ "$PLATFORM" = "unix" ]; then
+    # Unix-like paths
+    export PATH="$HOME/.local/share/pnpm:$HOME/.nvm/versions/node/$(node -v)/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+elif [ "$PLATFORM" = "windows" ]; then
+    # Windows paths
+    export PATH="$LOCALAPPDATA/pnpm:$APPDATA/pnpm:$PATH"
+    # Add common Windows Node.js paths
+    if [ -n "$USERPROFILE" ]; then
+        export PATH="$USERPROFILE/AppData/Roaming/npm:$USERPROFILE/.nvm/versions/node/$(node -v)/bin:$PATH"
+    fi
+fi
+
+# Run the main logic via Node.js for better cross-platform compatibility
+if command -v node >/dev/null 2>&1; then
+    node ./.husky/pre-commit.js
+else
+    echo "Error: Node.js is required but not found in PATH"
+    exit 1
+fi

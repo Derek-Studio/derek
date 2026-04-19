@@ -1,0 +1,56 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VARIANT: "22.04"
+
+    volumes:
+      # Mount the project root to the workspace
+      - ../..:/workspaces/nanocoder:cached
+
+      # Persist pnpm store cache for faster reinstalls
+      - nanocoder-pnpm-store:/home/vscode/.local/share/pnpm/store
+
+      # Optional: Mount Git credentials for authenticated operations
+      # Uncomment the line below and adjust path as needed
+      # - ${HOME}/.gitconfig:/home/vscode/.gitconfig:ro
+
+    # Override command to keep container running for development
+    command: sleep infinity
+
+    # Network mode for MCP server connectivity
+    # Using 'bridge' mode allows full network access for testing MCP servers
+    network_mode: bridge
+
+    # Environment variables for Nanocoder development
+    environment:
+      NODE_ENV: development
+      NANOCODER_LOG_LEVEL: debug
+      NANOCODER_LOG_TO_CONSOLE: "true"
+
+    # Port forwarding for development services
+    ports:
+      - "51820:51820"  # VS Code extension development port
+
+    # Capabilities for debugging
+    cap_add:
+      - SYS_PTRACE
+
+    # Security options for debugging
+    security_opt:
+      - seccomp:unconfined
+
+    # Container name for easy identification
+    container_name: nanocoder-dev
+
+    # Use the vscode user for all operations
+    user: vscode
+
+# Named volumes for persistence
+volumes:
+  nanocoder-pnpm-store:
+    driver: local
