@@ -28,6 +28,7 @@ export interface DiscordSessionData {
 	mode: DiscordDevelopmentMode;
 	createdAt: string;
 	lastActiveAt: string;
+	lastProcessedMessageId?: string;
 }
 
 export type DiscordDevelopmentMode = 'normal' | 'auto-accept' | 'yolo';

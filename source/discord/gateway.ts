@@ -38,6 +38,60 @@ function defaultWorkingDirectory(config: DiscordConfig): string {
 	return config.workingDirectory;
 }
 
+const MISSED_MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // ignore messages older than 24h
+
+/**
+ * On startup, fetch messages that arrived in active channels while the bot was offline
+ * and process them in order so nothing gets dropped during restarts.
+ */
+async function replayMissedMessages(
+	client: Client,
+	config: DiscordConfig,
+	runtime: HeadlessRuntime,
+): Promise<void> {
+	const sessions = discordSessionStore.listSessions();
+
+	for (const session of sessions) {
+		if (!session.lastProcessedMessageId) continue;
+
+		try {
+			const channel = await client.channels.fetch(session.channelId);
+			if (!channel || !channel.isTextBased()) continue;
+
+			// Fetch messages after the last one we processed (Discord returns newest-first,
+			// but `after` returns in ascending order so we get chronological order)
+			const fetched = await (
+				channel as TextChannel | ThreadChannel
+			).messages.fetch({
+				limit: 20,
+				after: session.lastProcessedMessageId,
+			});
+
+			const cutoff = Date.now() - MISSED_MESSAGE_MAX_AGE_MS;
+			const missed = [...fetched.values()]
+				.filter(m => !m.author.bot && m.createdTimestamp > cutoff)
+				.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+			if (missed.length === 0) continue;
+
+			console.log(
+				`Replaying ${missed.length} missed message(s) for channel ${session.channelId}`,
+			);
+
+			// Process each missed message in order through the normal handler
+			// (channel lock ensures they're serialised)
+			for (const msg of missed) {
+				await handleMessage(client, config, runtime, msg);
+			}
+		} catch (err) {
+			console.warn(
+				`Could not replay messages for channel ${session.channelId}:`,
+				err instanceof Error ? err.message : String(err),
+			);
+		}
+	}
+}
+
 export function setupGatewayHandlers(
 	client: Client,
 	config: DiscordConfig,
@@ -68,6 +122,13 @@ export function setupGatewayHandlers(
 					.catch(() => {});
 			}
 		}
+	});
+
+	// On startup, process any messages that arrived while the bot was offline
+	client.once('ready', () => {
+		replayMissedMessages(client, config, runtime).catch(err => {
+			console.error('Error replaying missed messages:', err);
+		});
 	});
 }
 
@@ -269,8 +330,11 @@ async function processUserMessage(
 			clearTimeout(editTimer);
 		}
 
-		// Save updated messages
+		// Save updated messages and mark this message as processed
 		await messageStore.saveMessages(conversationId, result.messages);
+		await discordSessionStore.updateSession(conversationId, {
+			lastProcessedMessageId: message.id,
+		});
 
 		// Send final response
 		const response = result.response || '*(no response)*';

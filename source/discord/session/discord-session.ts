@@ -91,7 +91,11 @@ export class DiscordSessionStore {
 		updates: Partial<
 			Pick<
 				DiscordSessionData,
-				'model' | 'provider' | 'mode' | 'workingDirectory'
+				| 'model'
+				| 'provider'
+				| 'mode'
+				| 'workingDirectory'
+				| 'lastProcessedMessageId'
 			>
 		>,
 	): Promise<DiscordSessionData | null> {
