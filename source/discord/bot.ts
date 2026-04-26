@@ -65,7 +65,7 @@ export async function startDiscordBot(opts?: {
 	// Setup event handlers
 	setupGatewayHandlers(client, config, runtime);
 
-	client.once('ready', () => {
+	client.once('clientReady', () => {
 		console.log(`\nDerek Discord Bot is online as ${client.user?.tag}`);
 		console.log(`  Serving ${client.guilds.cache.size} guild(s)`);
 		console.log('  Ready for messages.\n');
