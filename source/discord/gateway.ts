@@ -62,6 +62,10 @@ interface ActiveRun {
 	/** The set of queued-message ids that this run consumed, for display. */
 	consumedIds: string[];
 	startedAt: number;
+	/** Stored so Phase 6 (swap_to_thread) can re-run the same input in a thread. */
+	userContent: string;
+	imageParts: MessageImagePart[];
+	triggerMessage: DiscordJsMessage;
 }
 
 interface ChannelRunState {
@@ -174,7 +178,7 @@ export function setupGatewayHandlers(
 				interaction.isButton() &&
 				interaction.customId.startsWith(`${QUEUE_BUTTON_PREFIX}:`)
 			) {
-				await handleQueueButton(interaction);
+				await handleQueueButton(interaction, config, runtime);
 				return;
 			}
 			// Other component interactions (tool-approval buttons) are
@@ -326,6 +330,9 @@ async function drainQueueAndRun(
 			controller,
 			consumedIds: batch.map(b => b.discordMessage.id),
 			startedAt: Date.now(),
+			userContent,
+			imageParts,
+			triggerMessage,
 		};
 
 		try {
@@ -542,13 +549,20 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 		await statusLine.clear();
 
 		if (wasCancelled) {
-			const buffered = streamBuffer.trim();
-			const tail = buffered
-				? `\n\n**Partial output before stop:**\n${truncate(buffered, 1500)}`
-				: '';
-			await sendableChannel
-				.send(`⏹ Stopped.${tail}\n\nWhat would you like done differently?`)
-				.catch(() => {});
+			const isSwap = signal.reason === 'swap_to_thread';
+			if (isSwap) {
+				await sendableChannel
+					.send('⏭ Moving this run to a background thread…')
+					.catch(() => {});
+			} else {
+				const buffered = streamBuffer.trim();
+				const tail = buffered
+					? `\n\n**Partial output before stop:**\n${truncate(buffered, 1500)}`
+					: '';
+				await sendableChannel
+					.send(`⏹ Stopped.${tail}\n\nWhat would you like done differently?`)
+					.catch(() => {});
+			}
 		} else {
 			await sendableChannel
 				.send(`❌ Error: ${truncate(errorMsg, 1900)}`)
@@ -585,19 +599,91 @@ function truncate(s: string, max: number): string {
 	return `${s.slice(0, max)}…`;
 }
 
-// ─── Queue Prompt Button Handler ──────────────────────────────────────────
+// ─── Forked-Thread Runner ─────────────────────────────────────────────────
 
 /**
- * Handle a press on one of the queue-prompt buttons. Phase 3 ships with
- * dummy handlers: we acknowledge the press, strip the buttons, and drop a
- * placeholder note. Phases 5 and 6 wire up the real "run in background"
- * and "swap to thread" behaviour.
+ * Create a Discord thread from `triggerMessage`, fork the parent channel's
+ * session and message history into it, then run the agent turn there.
  *
- * Imported type from discord.js lazily via Parameters<...>['0'] to avoid
- * another top-level import.
+ * Used by both queue buttons:
+ *   • "background" — queued messages run in the thread while main continues
+ *   • "swap_to_thread" — the aborted main run is re-run in the thread
  */
+async function forkToThread({
+	config,
+	runtime,
+	parentChannelId,
+	guildId,
+	triggerMessage,
+	userContent,
+	imageParts,
+	threadName,
+}: {
+	config: DiscordConfig;
+	runtime: HeadlessRuntime;
+	parentChannelId: string;
+	guildId: string | undefined;
+	triggerMessage: DiscordJsMessage;
+	userContent: string;
+	imageParts: MessageImagePart[];
+	threadName: string;
+}): Promise<void> {
+	if (!('startThread' in triggerMessage)) {
+		console.warn('[forkToThread] triggerMessage does not support startThread');
+		return;
+	}
+
+	let thread: ThreadChannel;
+	try {
+		thread = await triggerMessage.startThread({
+			name: threadName.slice(0, 100),
+			autoArchiveDuration: 60,
+		});
+	} catch (err) {
+		console.error('[forkToThread] failed to create thread:', err);
+		return;
+	}
+
+	const parentConversationId = DiscordSessionStore.conversationId(
+		parentChannelId,
+		guildId,
+	);
+	const forked = await discordSessionStore.forkSession(
+		parentConversationId,
+		thread.id,
+		guildId,
+	);
+	if (!forked) {
+		await thread
+			.send('❌ Could not fork session — no parent session found.')
+			.catch(() => {});
+		return;
+	}
+
+	// Copy parent message history so the thread has full context
+	const parentMessages = await messageStore.getMessages(parentConversationId);
+	if (parentMessages.length > 0) {
+		await messageStore.saveMessages(forked.conversationId, parentMessages);
+	}
+
+	const controller = new AbortController();
+	await runAgentTurn({
+		config,
+		runtime,
+		channelId: thread.id,
+		triggerMessage,
+		userContent,
+		imageParts,
+		signal: controller.signal,
+	});
+}
+
+// ─── Queue Prompt Button Handler ──────────────────────────────────────────
+
 async function handleQueueButton(
 	interaction: import('discord.js').ButtonInteraction,
+	config: DiscordConfig,
+	runtime: HeadlessRuntime,
 ): Promise<void> {
 	const parsed = parseQueueButtonId(interaction.customId);
 	if (!parsed) {
@@ -628,36 +714,85 @@ async function handleQueueButton(
 	}
 
 	if (parsed.action === 'background') {
-		// Phase 5 will fork the queue into a background thread. For now:
-		await state.queuePrompt.dismiss({
-			keep: true,
-			note: `🔀 *[stub] Would fork ${state.queued.length} queued message(s) into a background thread with forked context. Not implemented yet — messages will still run in-channel after the current turn.*`,
-		});
+		// Pull the queued messages out before dismissing the prompt
+		const batch = state.queued.splice(0);
+		void state.queuePrompt.dismiss();
 		state.queuePrompt = null;
+
+		if (batch.length === 0) {
+			await interaction
+				.reply({content: '⚠️ Queue was already empty.', ephemeral: true})
+				.catch(() => {});
+			return;
+		}
+
+		const {userContent, imageParts} = buildCombinedUserContent(batch);
+		const guildId = interaction.guildId ?? undefined;
+		const firstMsg = batch[0].discordMessage;
+		const threadName = `Background: ${truncate(batch[0].content || 'queued task', 80)}`;
+
 		await interaction
 			.reply({
-				content:
-					'🔀 Background-fork action recorded (Phase 5 not implemented yet). Queued messages will still run in-channel.',
+				content: `🔀 Running ${batch.length} queued message${batch.length === 1 ? '' : 's'} in a background thread…`,
 				ephemeral: true,
 			})
 			.catch(() => {});
+
+		void forkToThread({
+			config,
+			runtime,
+			parentChannelId: channelId,
+			guildId,
+			triggerMessage: firstMsg,
+			userContent,
+			imageParts,
+			threadName,
+		});
 		return;
 	}
 
 	if (parsed.action === 'swap_to_thread') {
-		// Phase 6 will abort the current run and move it to a thread. For now:
-		await state.queuePrompt.dismiss({
-			keep: true,
-			note: '🧵 *[stub] Would move the currently-running turn into a forked thread and free the main channel for the queued messages. Not implemented yet.*',
-		});
+		if (!state.active) {
+			await interaction
+				.reply({content: '⚠️ Nothing is running to swap.', ephemeral: true})
+				.catch(() => {});
+			return;
+		}
+
+		const {userContent, imageParts, triggerMessage} = state.active;
+		const guildId = interaction.guildId ?? undefined;
+		const threadName = `Thread: ${truncate(userContent.replace(/^\[.*?\]:\s*/, ''), 80)}`;
+
+		// Save the queued messages — we'll put them back after aborting so they
+		// drain naturally into the main channel once the abort propagates.
+		const savedQueue = state.queued.splice(0);
+
+		void state.queuePrompt.dismiss();
 		state.queuePrompt = null;
+
+		// Abort the active run with a reason so runAgentTurn posts the right message
+		state.active.controller.abort('swap_to_thread');
+
+		// Re-queue the saved messages for the main channel
+		state.queued.push(...savedQueue);
+
 		await interaction
 			.reply({
-				content:
-					'🧵 Swap-to-thread action recorded (Phase 6 not implemented yet). Current run continues as normal.',
+				content: `🧵 Moving current run to a thread${savedQueue.length > 0 ? `, running ${savedQueue.length} queued message${savedQueue.length === 1 ? '' : 's'} here` : ''}.`,
 				ephemeral: true,
 			})
 			.catch(() => {});
+
+		void forkToThread({
+			config,
+			runtime,
+			parentChannelId: channelId,
+			guildId,
+			triggerMessage,
+			userContent,
+			imageParts,
+			threadName,
+		});
 		return;
 	}
 }
