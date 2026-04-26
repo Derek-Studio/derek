@@ -4,11 +4,12 @@ import type {LLMClient, Message} from '@/types/core';
 const CHARS_PER_TOKEN = 4;
 
 // Compact when history exceeds this many estimated tokens.
-// Leaves headroom for system prompt (~8k) + tools (~15k) + response (~8k).
-const COMPACT_TOKEN_THRESHOLD = 80_000;
+// Opus 4.7 / Opus 4.6 / Sonnet 4.6 all have 1M context windows.
+// Leaves headroom for system prompt + tools (~30k) + response (~8k).
+const COMPACT_TOKEN_THRESHOLD = 670_000;
 
 // Max tokens for a single incoming user message before we truncate it.
-const MAX_SINGLE_MESSAGE_TOKENS = 20_000;
+const MAX_SINGLE_MESSAGE_TOKENS = 200_000;
 const MAX_SINGLE_MESSAGE_CHARS = MAX_SINGLE_MESSAGE_TOKENS * CHARS_PER_TOKEN;
 
 // How many recent messages to always keep intact after compaction.

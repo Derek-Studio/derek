@@ -100,8 +100,8 @@ export function formatToolApproval(toolCall: ToolCall): string {
 /**
  * Format session status information.
  */
-const COMPACT_TOKEN_THRESHOLD = 80_000;
-const HARD_CAP_TOKENS = 120_000;
+const COMPACT_TOKEN_THRESHOLD = 670_000;
+const HARD_CAP_TOKENS = 960_000;
 
 export function formatSessionStatus(info: {
 	model?: string;
