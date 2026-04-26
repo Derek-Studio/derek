@@ -9,6 +9,12 @@ export {jsonSchema, tool};
 // biome-ignore lint/suspicious/noExplicitAny: Dynamic typing required
 export type AISDKCoreTool = AISDKTool<any, any>;
 
+export interface MessageImagePart {
+	type: 'image';
+	url: string;
+	mimeType?: string;
+}
+
 // Current Nanocoder message format (OpenAI-compatible)
 // Note: We maintain this format internally and convert to ModelMessage at AI SDK boundary
 export interface Message {
@@ -17,6 +23,8 @@ export interface Message {
 	tool_calls?: ToolCall[];
 	tool_call_id?: string;
 	name?: string;
+	/** Multimodal image attachments — only valid on user messages */
+	imageParts?: MessageImagePart[];
 }
 
 export interface ToolCall {

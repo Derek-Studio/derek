@@ -8,6 +8,8 @@ import {
 	type TextChannel,
 	type ThreadChannel,
 } from 'discord.js';
+import type {MessageImagePart} from '@/types/core';
+import {processAttachments} from './attachments.js';
 import {HeadlessRuntime} from './runtime/headless-runtime.js';
 import {requestToolApproval} from './runtime/tool-approval.js';
 import {
@@ -30,6 +32,13 @@ import {
 
 /** Per-channel processing lock to prevent concurrent responses. */
 const channelLocks = new Map<string, Promise<void>>();
+
+/**
+ * Per-channel AbortController for the currently-running `processUserMessage`.
+ * `/stop` looks this up to interrupt the in-flight LLM/tool loop so the user
+ * can give new feedback when Derek is going down the wrong path.
+ */
+const activeRuns = new Map<string, AbortController>();
 
 const STREAM_EDIT_INTERVAL_MS = 1500;
 const TOOL_CALL_THRESHOLD_FOR_THREAD = 3;
@@ -171,17 +180,52 @@ async function handleMessage(
 		content = content.replace(new RegExp(`<@!?${botId}>`, 'g'), '').trim();
 	}
 
-	if (!content) return;
+	// Process attachments: images → imageParts, text files → inlined blocks,
+	// anything else → a note so the agent knows it was sent.
+	const attachments = await processAttachments(message);
+
+	// Skip silently if there's nothing actionable (no text, no attachments).
+	if (
+		!content &&
+		attachments.imageParts.length === 0 &&
+		attachments.textBlocks.length === 0 &&
+		attachments.notes.length === 0
+	) {
+		return;
+	}
 
 	// Guard against single messages that would instantly overflow context
 	const guarded = guardMessageSize(content);
-	const userContent = `[${message.author.username}]: ${guarded.content}`;
+
+	// Build the user-facing text payload. Caption first (may be empty),
+	// then inlined text files, then any skip notes.
+	const parts: string[] = [];
+	if (guarded.content) parts.push(guarded.content);
+	if (attachments.textBlocks.length > 0)
+		parts.push(attachments.textBlocks.join('\n\n'));
+	if (attachments.notes.length > 0) parts.push(attachments.notes.join('\n'));
+	// If the user sent *only* images with no caption, give the LLM a tiny hint.
+	if (parts.length === 0 && attachments.imageParts.length > 0) {
+		parts.push(
+			`(${attachments.imageParts.length} image attachment${
+				attachments.imageParts.length === 1 ? '' : 's'
+			})`,
+		);
+	}
+	const userContent = `[${message.author.username}]: ${parts.join('\n\n')}`;
 
 	// Serialize per-channel to prevent interleaved responses
 	const channelId = message.channelId;
 	const prev = channelLocks.get(channelId) ?? Promise.resolve();
 	const current = prev.then(() =>
-		processUserMessage(client, config, runtime, message, userContent),
+		processUserMessage(
+			client,
+			config,
+			runtime,
+			message,
+			userContent,
+			attachments.imageParts,
+		),
 	);
 	channelLocks.set(
 		channelId,
@@ -196,6 +240,7 @@ async function processUserMessage(
 	runtime: HeadlessRuntime,
 	message: DiscordJsMessage,
 	userContent: string,
+	imageParts: MessageImagePart[] = [],
 ): Promise<void> {
 	const channelId = message.channelId;
 	const guildId = message.guild?.id;
@@ -261,6 +306,11 @@ async function processUserMessage(
 	};
 
 	const abortController = new AbortController();
+	// Register so `/stop` in this channel can interrupt us. If another run
+	// somehow registered (shouldn't happen — channelLocks serialises us), we
+	// overwrite it; the older run won't be reachable via /stop but will still
+	// finish on its own.
+	activeRuns.set(channelId, abortController);
 
 	try {
 		const result = await runtime.processMessage(
@@ -328,6 +378,7 @@ async function processUserMessage(
 				},
 			},
 			abortController.signal,
+			imageParts.length > 0 ? imageParts : undefined,
 		);
 
 		// Clear any pending edit timer
@@ -363,14 +414,39 @@ async function processUserMessage(
 		if (editTimer) clearTimeout(editTimer);
 
 		const errorMsg = error instanceof Error ? error.message : String(error);
-		await thinkingMsg
-			.edit(`❌ Error: ${errorMsg.slice(0, 1900)}`)
-			.catch(() => {});
+		const wasCancelled =
+			abortController.signal.aborted ||
+			errorMsg.toLowerCase().includes('cancelled') ||
+			errorMsg.toLowerCase().includes('aborted');
 
-		if (state.progressTracker) {
-			await state.progressTracker.fail(errorMsg.slice(0, 200));
+		if (wasCancelled) {
+			// User-initiated stop — render as an interrupt, not an error.
+			// The in-flight user turn is intentionally NOT saved to history,
+			// so the user can send a fresh message with corrected guidance.
+			const buffered = streamBuffer.trim();
+			const tail = buffered
+				? `\n\nPartial output before stop:\n${buffered.slice(-1500)}`
+				: '';
+			await thinkingMsg
+				.edit(`⏹ Stopped. Send a new message with the correction.${tail}`)
+				.catch(() => {});
+			if (state.progressTracker) {
+				await state.progressTracker.fail('Stopped by user');
+			}
+		} else {
+			await thinkingMsg
+				.edit(`❌ Error: ${errorMsg.slice(0, 1900)}`)
+				.catch(() => {});
+			if (state.progressTracker) {
+				await state.progressTracker.fail(errorMsg.slice(0, 200));
+			}
 		}
 	} finally {
+		// Release the /stop hook only if we're still the registered controller —
+		// avoids racing with a subsequent run that replaced us.
+		if (activeRuns.get(channelId) === abortController) {
+			activeRuns.delete(channelId);
+		}
 		// Restore previous working directory
 		process.chdir(previousCwd);
 	}
@@ -760,6 +836,24 @@ async function handleSlashCommand(
 			// A process manager (pm2, systemd, shell loop) should restart the process.
 			client.destroy();
 			process.exit(0);
+			break;
+		}
+
+		case 'stop': {
+			const controller = activeRuns.get(channelId);
+			if (!controller) {
+				await interaction.reply({
+					content: 'Nothing running in this channel right now.',
+					ephemeral: true,
+				});
+				return;
+			}
+			controller.abort();
+			// We don't delete from activeRuns here — processUserMessage's
+			// finally block will clean up once the abort propagates.
+			await interaction.reply(
+				'⏹ Stopping current run. Send a new message with the correction.',
+			);
 			break;
 		}
 

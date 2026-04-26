@@ -155,6 +155,7 @@ export class HeadlessRuntime {
 		mode: DiscordDevelopmentMode,
 		callbacks: RuntimeCallbacks,
 		signal?: AbortSignal,
+		imageParts?: import('@/types/core').MessageImagePart[],
 	): Promise<ProcessMessageResult> {
 		if (!this.client || !this.toolManager) {
 			throw new Error('Runtime not initialized. Call initialize() first.');
@@ -163,7 +164,11 @@ export class HeadlessRuntime {
 		const client = this.client;
 
 		// Append user message
-		const userMessage: Message = {role: 'user', content: userContent};
+		const userMessage: Message = {
+			role: 'user',
+			content: userContent,
+			...(imageParts?.length ? {imageParts} : {}),
+		};
 		messages.push(userMessage);
 
 		// Build system prompt

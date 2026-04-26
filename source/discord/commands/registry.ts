@@ -94,6 +94,13 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
 			.toJSON(),
 
 		new SlashCommandBuilder()
+			.setName('stop')
+			.setDescription(
+				'Interrupt the in-progress response in this channel so you can give new feedback',
+			)
+			.toJSON(),
+
+		new SlashCommandBuilder()
 			.setName('bash')
 			.setDescription("Run a shell command in this channel's working directory")
 			.addStringOption(opt =>

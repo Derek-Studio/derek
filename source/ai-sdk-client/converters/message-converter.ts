@@ -1,4 +1,10 @@
-import type {AssistantContent, ModelMessage, TextPart, ToolCallPart} from 'ai';
+import type {
+	AssistantContent,
+	ImagePart,
+	ModelMessage,
+	TextPart,
+	ToolCallPart,
+} from 'ai';
 import type {Message} from '@/types/index';
 import type {TestableMessage} from '../types.js';
 
@@ -60,9 +66,22 @@ export function convertToModelMessages(messages: Message[]): ModelMessage[] {
 		}
 
 		if (msg.role === 'user') {
+			if (!msg.imageParts?.length) {
+				return {role: 'user', content: msg.content};
+			}
 			return {
 				role: 'user',
-				content: msg.content,
+				content: [
+					{type: 'text', text: msg.content} as TextPart,
+					...msg.imageParts.map(
+						p =>
+							({
+								type: 'image',
+								image: new URL(p.url),
+								mimeType: p.mimeType,
+							}) as ImagePart,
+					),
+				],
 			};
 		}
 
