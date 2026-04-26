@@ -223,7 +223,12 @@ export class HeadlessRuntime {
 			);
 
 			if (!result?.choices?.[0]) {
-				throw new Error('No response from model');
+				const dump = result
+					? JSON.stringify(result, null, 2).slice(0, 800)
+					: 'null';
+				throw new Error(
+					`No response from model — choices[0] missing.\nRaw result: ${dump}`,
+				);
 			}
 
 			const message = result.choices[0].message;

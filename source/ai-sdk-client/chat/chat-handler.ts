@@ -388,9 +388,19 @@ export async function handleChat(
 					if (signal?.aborted) {
 						throw new Error('Operation was cancelled');
 					}
-					// Model returned empty response without cancellation
+					// Model returned empty response without cancellation — dump everything useful
+					const errName = error instanceof Error ? error.name : 'unknown';
+					const errMsg = error instanceof Error ? error.message : String(error);
+					const causeStr =
+						error instanceof Error && error.cause
+							? ` | cause: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`
+							: '';
 					throw new Error(
-						'Model returned empty response. This may indicate the model is not responding correctly or the prompt was unclear.',
+						`Empty response from ${providerConfig.name}/${currentModel} [${errName}]` +
+							`\nSDK message: ${errMsg}${causeStr}` +
+							`\nCorrelation ID: ${correlationId}` +
+							`\nModel returned no text and no tool calls (stop reason without output).` +
+							` Try: check provider logs, reduce context length, or switch model.`,
 					);
 				}
 				// There's a real error underneath, parse it
