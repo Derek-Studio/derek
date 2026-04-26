@@ -63,11 +63,12 @@ export function guardMessageSize(content: string): {
 export async function autoCompact(
 	messages: Message[],
 	client: LLMClient,
+	force = false,
 ): Promise<CompactionResult> {
 	const originalCount = messages.length;
 	const estimatedTokens = estimateTokens(messages);
 
-	if (estimatedTokens <= COMPACT_TOKEN_THRESHOLD) {
+	if (!force && estimatedTokens <= COMPACT_TOKEN_THRESHOLD) {
 		return {
 			messages,
 			compacted: false,

@@ -547,7 +547,7 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 				? `\n\n**Partial output before stop:**\n${truncate(buffered, 1500)}`
 				: '';
 			await sendableChannel
-				.send(`⏹ Stopped. Send a new message with the correction.${tail}`)
+				.send(`⏹ Stopped.${tail}\n\nWhat would you like done differently?`)
 				.catch(() => {});
 		} else {
 			await sendableChannel
@@ -983,21 +983,25 @@ async function handleSlashCommand(
 				return;
 			}
 
+			const estimatedTokens = Math.round(
+				messages.reduce((s, m) => {
+					const t =
+						typeof m.content === 'string'
+							? m.content
+							: JSON.stringify(m.content);
+					return s + t.length / 4;
+				}, 0),
+			);
 			await interaction.editReply(
-				`⏳ Summarising ${messages.length} messages...`,
+				`⏳ Summarising ${messages.length} messages (~${estimatedTokens.toLocaleString()} tokens)...`,
 			);
 
-			const result = await autoCompact(messages, client);
-			if (!result.compacted) {
-				await interaction.editReply(
-					`ℹ️ Context is ${messages.length} messages — nothing to compact yet (threshold: 40).`,
-				);
-				return;
-			}
-
+			const result = await autoCompact(messages, client, true);
 			await messageStore.saveMessages(conversationId, result.messages);
+			const method =
+				result.method === 'llm' ? 'LLM summary' : 'hard truncation';
 			await interaction.editReply(
-				`📦 Compacted ${result.originalCount} → ${result.messages.length} messages using LLM summary.`,
+				`📦 Compacted ${result.originalCount} → ${result.messages.length} messages via ${method} (~${result.estimatedTokens.toLocaleString()} tokens freed).`,
 			);
 			break;
 		}
@@ -1059,11 +1063,15 @@ async function handleSlashCommand(
 				return;
 			}
 			state.active.controller.abort();
+			// Clear the queue so drained messages don't auto-run after the stop.
+			if (state.queuePrompt) {
+				void state.queuePrompt.dismiss();
+				state.queuePrompt = null;
+			}
+			state.queued = [];
 			// state.active is cleared by drainQueueAndRun's finally block
 			// once the abort propagates through runAgentTurn.
-			await interaction.reply(
-				'⏹ Stopping current run. Send a new message with the correction.',
-			);
+			await interaction.reply({content: '⏹ Stopping.', ephemeral: true});
 			break;
 		}
 

@@ -227,6 +227,10 @@ export class HeadlessRuntime {
 				signal,
 			);
 
+			// Abort may have fired while the stream was already buffered — check
+			// before we process or post the response.
+			if (signal?.aborted) throw new Error('Operation was cancelled');
+
 			if (!result?.choices?.[0]) {
 				const dump = result
 					? JSON.stringify(result, null, 2).slice(0, 800)
@@ -324,6 +328,8 @@ export class HeadlessRuntime {
 
 			// Add tool results to messages
 			messages.push(...toolResults);
+
+			if (signal?.aborted) throw new Error('Operation was cancelled');
 
 			// If the model produced text AND tool calls, capture the text
 			// (the final response will be whatever comes after the last tool loop)
