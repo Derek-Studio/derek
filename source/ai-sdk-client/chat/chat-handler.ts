@@ -1,3 +1,4 @@
+import type {ProviderOptions} from '@ai-sdk/provider-utils';
 import type {LanguageModel} from 'ai';
 import {
 	InvalidToolInputError,
@@ -137,7 +138,7 @@ export async function handleChat(
 			// ChatGPT/Codex backend requires the system message as a top-level
 			// `instructions` field rather than as an input item. Extract it and
 			// pass via providerOptions so the Responses API includes it.
-			let providerOptions: Record<string, Record<string, unknown>> | undefined;
+			let providerOptions: ProviderOptions | undefined;
 			if (providerConfig.sdkProvider === 'chatgpt-codex') {
 				const systemMsg = messages.find(m => m.role === 'system');
 				providerOptions = {
@@ -150,7 +151,7 @@ export async function handleChat(
 			// Merge any provider-level providerOptions from config (e.g. toolStreaming: false for Foundry)
 			if (providerConfig.providerOptions) {
 				providerOptions = {
-					...providerConfig.providerOptions,
+					...(providerConfig.providerOptions as ProviderOptions),
 					...providerOptions,
 				};
 			}

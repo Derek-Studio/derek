@@ -105,6 +105,17 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
 			.toJSON(),
 
 		new SlashCommandBuilder()
+			.setName('task')
+			.setDescription('Run a task in the background while you keep chatting')
+			.addStringOption(opt =>
+				opt
+					.setName('prompt')
+					.setDescription('What should Derek work on?')
+					.setRequired(true),
+			)
+			.toJSON(),
+
+		new SlashCommandBuilder()
 			.setName('project')
 			.setDescription('Manage projects')
 			.addSubcommand(sub =>

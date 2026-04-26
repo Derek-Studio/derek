@@ -10,6 +10,7 @@ import {
 } from 'discord.js';
 import {HeadlessRuntime} from './runtime/headless-runtime.js';
 import {requestToolApproval} from './runtime/tool-approval.js';
+import {autoCompact} from './session/compaction.js';
 import {
 	DiscordSessionStore,
 	discordSessionStore,
@@ -156,8 +157,16 @@ async function processUserMessage(
 		process.chdir(config.workingDirectory);
 	}
 
-	// Load message history
-	const messages = await messageStore.getMessages(conversationId);
+	// Load message history (auto-compact if too long)
+	let messages = await messageStore.getMessages(conversationId);
+	const llmClient = runtime.getClient();
+	if (llmClient) {
+		const compaction = await autoCompact(messages, llmClient);
+		if (compaction.compacted) {
+			messages = compaction.messages;
+			await messageStore.saveMessages(conversationId, messages);
+		}
+	}
 
 	// Send typing + initial "thinking" message
 	const channel = message.channel;
@@ -401,6 +410,76 @@ async function handleProjectCreate(
 	}
 }
 
+// ─── Background Task Runner ───────────────────────────────────────────────
+
+const TASK_UPDATE_INTERVAL = 8; // post a streaming update every N tool calls
+
+async function runBackgroundTask(
+	runtime: HeadlessRuntime,
+	thread: ThreadChannel,
+	prompt: string,
+	cwd: string,
+	mode: DiscordDevelopmentMode,
+	guildId: string | undefined,
+	originChannelId: string,
+	userId: string,
+): Promise<void> {
+	const previousCwd = process.cwd();
+	try {
+		process.chdir(cwd);
+	} catch {
+		/* keep cwd if chdir fails */
+	}
+
+	let toolCallsSinceUpdate = 0;
+	let currentStepMsg: DiscordJsMessage | null = null;
+
+	try {
+		const result = await runtime.processMessage(
+			[], // fresh history — background tasks are isolated
+			prompt,
+			mode,
+			{
+				onToken: () => {
+					// We don't stream token-by-token into the thread — post on completion
+				},
+				onToolApproval: async () => 'approve', // always approve in background
+				onToolStart: async (toolName, args) => {
+					toolCallsSinceUpdate++;
+					// Post a brief status update every N tool calls so progress is visible
+					if (toolCallsSinceUpdate % TASK_UPDATE_INTERVAL === 1) {
+						const argStr = JSON.stringify(args).slice(0, 80);
+						currentStepMsg = await thread
+							.send(`🔧 \`${toolName}\` — ${argStr}…`)
+							.catch(() => null);
+					}
+				},
+				onToolResult: async () => {},
+			},
+		);
+
+		// Post the final response to the thread
+		const chunks = splitMessage(
+			result.response || '*(task complete — no output)*',
+		);
+		for (const chunk of chunks) {
+			await thread.send(chunk).catch(() => {});
+		}
+
+		// Ping the user in the origin channel
+		const originChannel = thread.parent;
+		if (originChannel && 'send' in originChannel) {
+			await (originChannel as TextChannel).send(
+				`<@${userId}> ✅ Background task finished — ${result.toolCallCount} tool calls. See ${thread}.`,
+			);
+		}
+	} finally {
+		process.chdir(previousCwd);
+		// Keep TypeScript happy — currentStepMsg used to avoid unused-var warning
+		void currentStepMsg;
+	}
+}
+
 // ─── Slash Command Handling ────────────────────────────────────────────────
 
 async function handleSlashCommand(
@@ -547,20 +626,27 @@ async function handleSlashCommand(
 				return;
 			}
 
-			// Simple compaction: keep first 2 and last half of messages
-			const keepCount = Math.max(Math.floor(messages.length / 2), 10);
-			const compacted = [
-				...messages.slice(0, 2),
-				{
-					role: 'system' as const,
-					content: `[${messages.length - keepCount - 2} earlier messages compressed]`,
-				},
-				...messages.slice(messages.length - keepCount),
-			];
+			const client = runtime.getClient();
+			if (!client) {
+				await interaction.editReply('❌ Runtime not ready.');
+				return;
+			}
 
-			await messageStore.saveMessages(conversationId, compacted);
 			await interaction.editReply(
-				`📦 Compacted from ${messages.length} to ${compacted.length} messages.`,
+				`⏳ Summarising ${messages.length} messages...`,
+			);
+
+			const result = await autoCompact(messages, client);
+			if (!result.compacted) {
+				await interaction.editReply(
+					`ℹ️ Context is ${messages.length} messages — nothing to compact yet (threshold: 40).`,
+				);
+				return;
+			}
+
+			await messageStore.saveMessages(conversationId, result.messages);
+			await interaction.editReply(
+				`📦 Compacted ${result.originalCount} → ${result.messages.length} messages using LLM summary.`,
 			);
 			break;
 		}
@@ -643,6 +729,55 @@ async function handleSlashCommand(
 					`❌ \`${command}\` (in \`${cwd}\`)\n\`\`\`\n${msg.slice(0, 1800)}\n\`\`\``,
 				);
 			}
+			break;
+		}
+
+		case 'task': {
+			const prompt = interaction.options.getString('prompt', true);
+			const session = discordSessionStore.getSession(conversationId);
+			const taskCwd = session?.workingDirectory ?? config.workingDirectory;
+			const taskMode = session?.mode ?? 'auto-accept';
+
+			const channel = interaction.channel;
+			if (
+				!channel ||
+				(channel.type !== ChannelType.GuildText &&
+					channel.type !== ChannelType.PublicThread &&
+					channel.type !== ChannelType.PrivateThread)
+			) {
+				await interaction.reply({
+					content: '❌ Background tasks require a text channel.',
+					ephemeral: true,
+				});
+				return;
+			}
+
+			// Reply immediately so the user can keep chatting
+			await interaction.reply(
+				`⚡ Task started in a thread. I'll post updates there and ping you when done.`,
+			);
+
+			// Create a thread for the background task
+			const reply = await interaction.fetchReply();
+			const thread = await (reply as DiscordJsMessage).startThread({
+				name: `⚙️ ${prompt.slice(0, 90)}`,
+				autoArchiveDuration: 1440,
+			});
+
+			// Fire-and-forget — does not hold the channel lock
+			runBackgroundTask(
+				runtime,
+				thread,
+				prompt,
+				taskCwd,
+				taskMode,
+				guildId,
+				channelId,
+				interaction.user.id,
+			).catch(err => {
+				const msg = err instanceof Error ? err.message : String(err);
+				thread.send(`❌ Task crashed: ${msg}`).catch(() => {});
+			});
 			break;
 		}
 
