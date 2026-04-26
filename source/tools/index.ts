@@ -10,6 +10,7 @@ import {getGitTools} from '@/tools/git';
 import {listDirectoryTool} from '@/tools/list-directory';
 import {getDiagnosticsTool} from '@/tools/lsp-get-diagnostics';
 import {readFileTool} from '@/tools/read-file';
+import {requestSecretTool} from '@/tools/request-secret';
 import {searchFileContentsTool} from '@/tools/search-file-contents';
 import {
 	createTaskTool,
@@ -35,6 +36,7 @@ const staticTools: NanocoderToolExport[] = [
 	agentTool,
 	// Interaction tools
 	askQuestionTool,
+	requestSecretTool,
 	// File operation tools
 	...getFileOpTools(),
 	// Task management tools

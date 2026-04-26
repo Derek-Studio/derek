@@ -1,4 +1,10 @@
 import {Client, GatewayIntentBits, Partials} from 'discord.js';
+import {
+	type SecretDispatchRequest,
+	setSecretDispatchHandler,
+} from '@/secrets/dispatcher';
+import {createSecretLink} from '@/secrets/http-server';
+import {pendingSecretStore} from '@/secrets/pending-store';
 import {registerCommands} from './commands/registry.js';
 import {loadDiscordConfig} from './config.js';
 import {setupGatewayHandlers} from './gateway.js';
@@ -60,6 +66,61 @@ export async function startDiscordBot(opts?: {
 			GatewayIntentBits.DirectMessages,
 		],
 		partials: [Partials.Channel], // Required for DMs
+	});
+
+	// Register the HTTP one-time-link secret handler
+	setSecretDispatchHandler(async (request: SecretDispatchRequest) => {
+		const entry = pendingSecretStore.create({
+			key: request.key,
+			description: request.description,
+			scope: request.scope,
+			projectDir: request.projectDir,
+			filePath: request.filePath,
+			channelId: request.channelId,
+			ttlMs: request.ttlMs ?? 5 * 60 * 1000,
+			resolve: () => {},
+		});
+
+		return new Promise(resolve => {
+			// Patch the resolve onto the entry after creation
+			(entry as {resolve: typeof resolve}).resolve = resolve;
+
+			if (request.signal?.aborted) {
+				pendingSecretStore.cancel(entry.id, 'Aborted before posting');
+				return;
+			}
+			request.signal?.addEventListener(
+				'abort',
+				() => pendingSecretStore.cancel(entry.id, 'Agent turn was stopped'),
+				{once: true},
+			);
+
+			void (async () => {
+				try {
+					const url = await createSecretLink(request, entry.id);
+					const channel = await client.channels
+						.fetch(request.channelId)
+						.catch(() => null);
+					if (channel && 'send' in channel) {
+						const expiresMin = Math.round(
+							(entry.expiresAt - Date.now()) / 60_000,
+						);
+						const label = request.filePath
+							? `file \`${request.filePath}\``
+							: `\`${request.key}\``;
+						await (channel as import('discord.js').TextChannel).send(
+							`🔐 **Derek needs a secret: ${label}**\n` +
+								`${request.description}\n\n` +
+								`**[Click here to provide it securely](${url})**\n` +
+								`*(link expires in ${expiresMin} min — the value goes directly to the server, not through Discord)*`,
+						);
+					}
+				} catch (err) {
+					const reason = err instanceof Error ? err.message : String(err);
+					pendingSecretStore.cancel(entry.id, `Failed to post link: ${reason}`);
+				}
+			})();
+		});
 	});
 
 	// Setup event handlers
