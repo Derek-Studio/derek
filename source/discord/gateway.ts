@@ -25,6 +25,11 @@ import {messageStore} from './session/message-store.js';
 import type {DiscordConfig, DiscordDevelopmentMode} from './types.js';
 import {formatSessionStatus} from './ui/message-formatter.js';
 import {splitMessage} from './ui/message-splitter.js';
+import {
+	parseQueueButtonId,
+	QUEUE_BUTTON_PREFIX,
+	QueuePrompt,
+} from './ui/queue-prompt.js';
 import {StatusLine} from './ui/status-line.js';
 
 // ─── Per-Channel State Machine ─────────────────────────────────────────────
@@ -59,20 +64,13 @@ interface ActiveRun {
 	startedAt: number;
 }
 
-/** Placeholder — wired up fully in Phase 3 when we add the buttons. */
-interface QueuePromptHandle {
-	message: DiscordJsMessage;
-	/** Unique per-prompt nonce embedded in button customIds. */
-	nonce: string;
-}
-
 interface ChannelRunState {
 	/** Non-null iff a `runAgentTurn` is currently executing for this channel. */
 	active: ActiveRun | null;
 	/** Messages received while `active` was non-null. Drained into next run. */
 	queued: QueuedMessage[];
 	/** UI message offering buttons when `queued.length > 0 && active !== null`. */
-	queuePrompt: QueuePromptHandle | null;
+	queuePrompt: QueuePrompt | null;
 }
 
 const channelStates = new Map<string, ChannelRunState>();
@@ -162,14 +160,26 @@ export function setupGatewayHandlers(
 	});
 
 	client.on('interactionCreate', async interaction => {
-		if (!interaction.isChatInputCommand()) return;
 		try {
-			await handleSlashCommand(
-				client,
-				config,
-				runtime,
-				interaction as ChatInputCommandInteraction,
-			);
+			if (interaction.isChatInputCommand()) {
+				await handleSlashCommand(
+					client,
+					config,
+					runtime,
+					interaction as ChatInputCommandInteraction,
+				);
+				return;
+			}
+			if (
+				interaction.isButton() &&
+				interaction.customId.startsWith(`${QUEUE_BUTTON_PREFIX}:`)
+			) {
+				await handleQueueButton(interaction);
+				return;
+			}
+			// Other component interactions (tool-approval buttons) are
+			// awaited via awaitMessageComponent inside requestToolApproval,
+			// not routed through here.
 		} catch (error) {
 			console.error('Error handling interaction:', error);
 			if (interaction.isRepliable() && !interaction.replied) {
@@ -253,14 +263,31 @@ async function handleMessage(
 	state.queued.push(queued);
 
 	if (state.active) {
-		// A run is in progress — leave the message queued. Phase 3 will post
-		// a button-prompt here so the user can redirect the queue to a thread.
-		// For now the queue just drains naturally when the active run ends.
+		// A run is in progress — leave the message queued and surface a
+		// prompt with the redirect buttons. Prompt edits in place as more
+		// messages queue.
+		const channel = message.channel;
+		if ('send' in channel) {
+			const sendable = channel as TextChannel | ThreadChannel;
+			if (!state.queuePrompt) {
+				const nonce = makeQueueNonce();
+				state.queuePrompt = new QueuePrompt(sendable, nonce);
+			}
+			void state.queuePrompt.update(state.queued.length);
+		}
 		return;
 	}
 
 	// No active run — start draining immediately.
 	await drainQueueAndRun(config, runtime, channelId);
+}
+
+/**
+ * Random nonce embedded in queue-prompt button customIds so we can detect
+ * stale presses (button from an earlier prompt that's since been replaced).
+ */
+function makeQueueNonce(): string {
+	return Math.random().toString(36).slice(2, 10);
 }
 
 /**
@@ -282,6 +309,12 @@ async function drainQueueAndRun(
 	// in the next iteration rather than firing two separate runs.
 	while (state.queued.length > 0 && !state.active) {
 		const batch = state.queued.splice(0, state.queued.length);
+		// The queue is being drained into a turn — the prompt is no longer
+		// actionable. Dismiss it before the run starts.
+		if (state.queuePrompt) {
+			void state.queuePrompt.dismiss();
+			state.queuePrompt = null;
+		}
 		const {userContent, imageParts} = buildCombinedUserContent(batch);
 
 		// `triggerMessage` is the message we anchor a thread off if we ever
@@ -550,6 +583,83 @@ function formatToolStatus(
 function truncate(s: string, max: number): string {
 	if (s.length <= max) return s;
 	return `${s.slice(0, max)}…`;
+}
+
+// ─── Queue Prompt Button Handler ──────────────────────────────────────────
+
+/**
+ * Handle a press on one of the queue-prompt buttons. Phase 3 ships with
+ * dummy handlers: we acknowledge the press, strip the buttons, and drop a
+ * placeholder note. Phases 5 and 6 wire up the real "run in background"
+ * and "swap to thread" behaviour.
+ *
+ * Imported type from discord.js lazily via Parameters<...>['0'] to avoid
+ * another top-level import.
+ */
+async function handleQueueButton(
+	interaction: import('discord.js').ButtonInteraction,
+): Promise<void> {
+	const parsed = parseQueueButtonId(interaction.customId);
+	if (!parsed) {
+		await interaction
+			.reply({content: '❌ Unknown queue action.', ephemeral: true})
+			.catch(() => {});
+		return;
+	}
+
+	const channelId = interaction.channelId;
+	const state = channelStates.get(channelId);
+
+	// Detect stale presses: the prompt this button came from might have been
+	// replaced by a newer one, or already dismissed. In either case, refuse.
+	if (
+		!state ||
+		!state.queuePrompt ||
+		state.queuePrompt.nonce !== parsed.nonce
+	) {
+		await interaction
+			.reply({
+				content:
+					'⚠️ This queue prompt is no longer active (a newer one replaced it, or the queue already drained).',
+				ephemeral: true,
+			})
+			.catch(() => {});
+		return;
+	}
+
+	if (parsed.action === 'background') {
+		// Phase 5 will fork the queue into a background thread. For now:
+		await state.queuePrompt.dismiss({
+			keep: true,
+			note: `🔀 *[stub] Would fork ${state.queued.length} queued message(s) into a background thread with forked context. Not implemented yet — messages will still run in-channel after the current turn.*`,
+		});
+		state.queuePrompt = null;
+		await interaction
+			.reply({
+				content:
+					'🔀 Background-fork action recorded (Phase 5 not implemented yet). Queued messages will still run in-channel.',
+				ephemeral: true,
+			})
+			.catch(() => {});
+		return;
+	}
+
+	if (parsed.action === 'swap_to_thread') {
+		// Phase 6 will abort the current run and move it to a thread. For now:
+		await state.queuePrompt.dismiss({
+			keep: true,
+			note: '🧵 *[stub] Would move the currently-running turn into a forked thread and free the main channel for the queued messages. Not implemented yet.*',
+		});
+		state.queuePrompt = null;
+		await interaction
+			.reply({
+				content:
+					'🧵 Swap-to-thread action recorded (Phase 6 not implemented yet). Current run continues as normal.',
+				ephemeral: true,
+			})
+			.catch(() => {});
+		return;
+	}
 }
 
 // ─── Project Creation ─────────────────────────────────────────────────────
