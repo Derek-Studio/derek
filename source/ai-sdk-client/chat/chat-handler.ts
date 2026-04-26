@@ -1,6 +1,7 @@
 import type {ProviderOptions} from '@ai-sdk/provider-utils';
 import type {LanguageModel} from 'ai';
 import {
+	APICallError,
 	InvalidToolInputError,
 	NoSuchToolError,
 	stepCountIs,
@@ -125,10 +126,36 @@ export async function handleChat(
 			// Convert messages to AI SDK v5 ModelMessage format
 			const modelMessages = convertToModelMessages(messages);
 
-			logger.debug('AI SDK request prepared', {
+			// Log exactly what we're sending so failures are diagnosable
+			const lastMsg = modelMessages[modelMessages.length - 1];
+			const lastMsgPreview = lastMsg
+				? (() => {
+						const c = lastMsg.content;
+						const text =
+							typeof c === 'string'
+								? c
+								: Array.isArray(c)
+									? c
+											.map(p =>
+												typeof p === 'object' && p !== null && 'text' in p
+													? String(p.text)
+													: '',
+											)
+											.join('')
+									: JSON.stringify(c);
+						return text.slice(0, 120);
+					})()
+				: '(none)';
+			logger.info('LLM request', {
+				correlationId,
+				provider: providerConfig.name,
+				model: currentModel,
 				messageCount: modelMessages.length,
-				hasTools: !!aiTools,
+				roles: modelMessages.map(m => m.role).join(','),
 				toolCount: aiTools ? Object.keys(aiTools).length : 0,
+				toolsDisabled: shouldDisableTools,
+				lastMessageRole: lastMsg?.role,
+				lastMessagePreview: lastMsgPreview,
 			});
 
 			// Tools with needsApproval: false auto-execute in the SDK's loop
@@ -169,11 +196,25 @@ export async function handleChat(
 					// Catch streaming errors so raw SSE events don't leak to stdout.
 					// The error will still be thrown by the stream and caught by
 					// the outer try-catch for proper formatting.
-					logger.warn('Streaming error received', {
-						error: error instanceof Error ? error.message : String(error),
-						model: currentModel,
+					const isApiErr = APICallError.isInstance(error);
+					logger.error('Streaming error received', {
 						correlationId,
 						provider: providerConfig.name,
+						model: currentModel,
+						errorName: error instanceof Error ? error.name : 'unknown',
+						errorMessage:
+							error instanceof Error ? error.message : String(error),
+						errorCause:
+							error instanceof Error && error.cause
+								? error.cause instanceof Error
+									? error.cause.message
+									: String(error.cause)
+								: undefined,
+						statusCode: isApiErr ? error.statusCode : undefined,
+						responseBody: isApiErr
+							? error.responseBody?.slice(0, 1000)
+							: undefined,
+						requestUrl: isApiErr ? error.url : undefined,
 					});
 				},
 				headers: providerConfig.config.headers,
@@ -229,18 +270,27 @@ export async function handleChat(
 			}
 			flushBuffer();
 
-			// After streaming completes, collect final results
-			const [fullText, resolvedToolCalls, resolvedSteps] = await Promise.all([
-				result.text,
-				result.toolCalls,
-				result.steps,
-			]);
+			// After streaming completes, collect final results including finish reason + usage
+			const [fullText, resolvedToolCalls, resolvedSteps, usage, finishReason] =
+				await Promise.all([
+					result.text,
+					result.toolCalls,
+					result.steps,
+					result.usage,
+					result.finishReason,
+				]);
 
-			logger.debug('AI SDK response received', {
-				responseLength: fullText.length,
-				hasToolCalls: resolvedToolCalls.length > 0,
+			logger.info('LLM response', {
+				correlationId,
+				provider: providerConfig.name,
+				model: currentModel,
+				finishReason,
+				inputTokens: usage.inputTokens,
+				outputTokens: usage.outputTokens,
+				textLength: fullText.length,
 				toolCallCount: resolvedToolCalls.length,
 				stepCount: resolvedSteps.length,
+				stepFinishReasons: resolvedSteps.map(s => s.finishReason).join(','),
 			});
 
 			// Without execute functions on tools, the SDK doesn't auto-execute anything.
