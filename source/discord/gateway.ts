@@ -9,7 +9,7 @@ import {
 	type ThreadChannel,
 } from 'discord.js';
 import type {MessageImagePart} from '@/types/core';
-import {processAttachments} from './attachments.js';
+import {type ProcessedAttachments, processAttachments} from './attachments.js';
 import {HeadlessRuntime} from './runtime/headless-runtime.js';
 import {requestToolApproval} from './runtime/tool-approval.js';
 import {
@@ -27,15 +27,64 @@ import {formatSessionStatus} from './ui/message-formatter.js';
 import {splitMessage} from './ui/message-splitter.js';
 import {StatusLine} from './ui/status-line.js';
 
-/** Per-channel processing lock to prevent concurrent responses. */
-const channelLocks = new Map<string, Promise<void>>();
+// ─── Per-Channel State Machine ─────────────────────────────────────────────
+//
+// Each channel carrying a conversation has a single ChannelRunState that
+// tracks whether Derek is currently running a turn and what messages have
+// arrived while he was busy. At most one agent turn runs per channel at
+// any time. Messages that arrive during an active run are queued and
+// drained as a single combined turn when the active run completes.
+//
+// This replaces the previous promise-chain `channelLocks` approach, which
+// serialised correctly but made it hard to (a) see how many messages
+// were queued up, (b) expose buttons to redirect them, and (c) combine
+// multiple queued messages into a single turn.
 
-/**
- * Per-channel AbortController for the currently-running `processUserMessage`.
- * `/stop` looks this up to interrupt the in-flight LLM/tool loop so the user
- * can give new feedback when Derek is going down the wrong path.
- */
-const activeRuns = new Map<string, AbortController>();
+/** One queued user message, fully resolved (attachments already processed). */
+interface QueuedMessage {
+	/** The raw discord.js Message — retained so we can start threads off it. */
+	discordMessage: DiscordJsMessage;
+	/** Bot-mention-stripped content. May be empty if message was just attachments. */
+	content: string;
+	authorUsername: string;
+	/** Pre-processed attachments: images + inlined text blocks + skip notes. */
+	attachments: ProcessedAttachments;
+	receivedAt: number;
+}
+
+interface ActiveRun {
+	controller: AbortController;
+	/** The set of queued-message ids that this run consumed, for display. */
+	consumedIds: string[];
+	startedAt: number;
+}
+
+/** Placeholder — wired up fully in Phase 3 when we add the buttons. */
+interface QueuePromptHandle {
+	message: DiscordJsMessage;
+	/** Unique per-prompt nonce embedded in button customIds. */
+	nonce: string;
+}
+
+interface ChannelRunState {
+	/** Non-null iff a `runAgentTurn` is currently executing for this channel. */
+	active: ActiveRun | null;
+	/** Messages received while `active` was non-null. Drained into next run. */
+	queued: QueuedMessage[];
+	/** UI message offering buttons when `queued.length > 0 && active !== null`. */
+	queuePrompt: QueuePromptHandle | null;
+}
+
+const channelStates = new Map<string, ChannelRunState>();
+
+function getChannelState(channelId: string): ChannelRunState {
+	let state = channelStates.get(channelId);
+	if (!state) {
+		state = {active: null, queued: [], queuePrompt: null};
+		channelStates.set(channelId, state);
+	}
+	return state;
+}
 
 /**
  * Resolve the working directory for a new session in a channel.
@@ -139,7 +188,14 @@ export function setupGatewayHandlers(
 	});
 }
 
-// ─── Message Handling ──────────────────────────────────────────────────────
+// ─── Message Ingestion ────────────────────────────────────────────────────
+//
+// `handleMessage` is the single entry point for incoming Discord messages.
+// It validates allowlists, resolves attachments, then enqueues the message
+// against the channel's state. If no run is active, it kicks off
+// `drainQueueAndRun`. Otherwise the message sits in the queue until the
+// active run completes, at which point all pending messages are combined
+// into one user turn.
 
 async function handleMessage(
 	client: Client,
@@ -147,10 +203,8 @@ async function handleMessage(
 	runtime: HeadlessRuntime,
 	message: DiscordJsMessage,
 ): Promise<void> {
-	// Ignore bots (including self)
 	if (message.author.bot) return;
 
-	// Check guild allowlist
 	if (
 		message.guild &&
 		config.guildIds.length > 0 &&
@@ -159,7 +213,6 @@ async function handleMessage(
 		return;
 	}
 
-	// Check channel allowlist
 	if (
 		config.allowedChannelIds.length > 0 &&
 		!config.allowedChannelIds.includes(message.channelId)
@@ -167,18 +220,16 @@ async function handleMessage(
 		return;
 	}
 
-	// Strip bot mention from content (if someone still @mentions)
+	// Strip bot mention from content
 	const botId = client.user?.id;
 	let content = message.content;
 	if (botId) {
 		content = content.replace(new RegExp(`<@!?${botId}>`, 'g'), '').trim();
 	}
 
-	// Process attachments: images → imageParts, text files → inlined blocks,
-	// anything else → a note so the agent knows it was sent.
 	const attachments = await processAttachments(message);
 
-	// Skip silently if there's nothing actionable (no text, no attachments).
+	// Skip silently if there's nothing actionable
 	if (
 		!content &&
 		attachments.imageParts.length === 0 &&
@@ -188,56 +239,173 @@ async function handleMessage(
 		return;
 	}
 
-	// Guard against single messages that would instantly overflow context
-	const guarded = guardMessageSize(content);
-
-	// Build the user-facing text payload. Caption first (may be empty),
-	// then inlined text files, then any skip notes.
-	const parts: string[] = [];
-	if (guarded.content) parts.push(guarded.content);
-	if (attachments.textBlocks.length > 0)
-		parts.push(attachments.textBlocks.join('\n\n'));
-	if (attachments.notes.length > 0) parts.push(attachments.notes.join('\n'));
-	// If the user sent *only* images with no caption, give the LLM a tiny hint.
-	if (parts.length === 0 && attachments.imageParts.length > 0) {
-		parts.push(
-			`(${attachments.imageParts.length} image attachment${
-				attachments.imageParts.length === 1 ? '' : 's'
-			})`,
-		);
-	}
-	const userContent = `[${message.author.username}]: ${parts.join('\n\n')}`;
-
-	// Serialize per-channel to prevent interleaved responses
 	const channelId = message.channelId;
-	const prev = channelLocks.get(channelId) ?? Promise.resolve();
-	const current = prev.then(() =>
-		processUserMessage(
-			client,
-			config,
-			runtime,
-			message,
-			userContent,
-			attachments.imageParts,
-		),
-	);
-	channelLocks.set(
-		channelId,
-		current.catch(() => {}),
-	);
-	await current;
+	const state = getChannelState(channelId);
+
+	const queued: QueuedMessage = {
+		discordMessage: message,
+		content,
+		authorUsername: message.author.username,
+		attachments,
+		receivedAt: Date.now(),
+	};
+
+	state.queued.push(queued);
+
+	if (state.active) {
+		// A run is in progress — leave the message queued. Phase 3 will post
+		// a button-prompt here so the user can redirect the queue to a thread.
+		// For now the queue just drains naturally when the active run ends.
+		return;
+	}
+
+	// No active run — start draining immediately.
+	await drainQueueAndRun(config, runtime, channelId);
 }
 
-async function processUserMessage(
-	client: Client,
+/**
+ * Pull every queued message off `state.queued`, combine them into a single
+ * user turn, and run the agent loop. On completion, recurse if more messages
+ * arrived during the run.
+ *
+ * Idempotent: returns immediately if already running. The caller is expected
+ * to hold off and let the outer state machine call us again.
+ */
+async function drainQueueAndRun(
 	config: DiscordConfig,
 	runtime: HeadlessRuntime,
-	message: DiscordJsMessage,
-	userContent: string,
-	imageParts: MessageImagePart[] = [],
+	channelId: string,
 ): Promise<void> {
-	const channelId = message.channelId;
-	const guildId = message.guild?.id;
+	const state = getChannelState(channelId);
+
+	// Loop in case more messages arrive during a turn — drain them together
+	// in the next iteration rather than firing two separate runs.
+	while (state.queued.length > 0 && !state.active) {
+		const batch = state.queued.splice(0, state.queued.length);
+		const {userContent, imageParts} = buildCombinedUserContent(batch);
+
+		// `triggerMessage` is the message we anchor a thread off if we ever
+		// need to. The first message in the batch is conventional.
+		const triggerMessage = batch[0].discordMessage;
+
+		const controller = new AbortController();
+		state.active = {
+			controller,
+			consumedIds: batch.map(b => b.discordMessage.id),
+			startedAt: Date.now(),
+		};
+
+		try {
+			await runAgentTurn({
+				config,
+				runtime,
+				channelId,
+				triggerMessage,
+				userContent,
+				imageParts,
+				signal: controller.signal,
+			});
+		} catch (err) {
+			// runAgentTurn handles its own UI for errors/cancellation. If
+			// something escapes (programming error) log it loudly so we know.
+			console.error(`runAgentTurn escaped error in channel ${channelId}:`, err);
+		} finally {
+			state.active = null;
+		}
+		// Loop continues if more messages queued up while we were running.
+	}
+}
+
+/**
+ * Combine N queued messages into a single user-content payload + merged image
+ * list. Single-message form preserves today's `[username]: ...` framing.
+ * Multi-message form uses a numbered list so the LLM can see the messages
+ * are distinct (per spec — they may matter as separate thoughts).
+ */
+function buildCombinedUserContent(batch: QueuedMessage[]): {
+	userContent: string;
+	imageParts: MessageImagePart[];
+} {
+	const allImages: MessageImagePart[] = [];
+
+	const renderOne = (m: QueuedMessage): string => {
+		const guarded = guardMessageSize(m.content);
+		const parts: string[] = [];
+		if (guarded.content) parts.push(guarded.content);
+		if (m.attachments.textBlocks.length > 0) {
+			parts.push(m.attachments.textBlocks.join('\n\n'));
+		}
+		if (m.attachments.notes.length > 0) {
+			parts.push(m.attachments.notes.join('\n'));
+		}
+		if (parts.length === 0 && m.attachments.imageParts.length > 0) {
+			parts.push(
+				`(${m.attachments.imageParts.length} image attachment${
+					m.attachments.imageParts.length === 1 ? '' : 's'
+				})`,
+			);
+		}
+		return parts.join('\n\n');
+	};
+
+	for (const m of batch) {
+		allImages.push(...m.attachments.imageParts);
+	}
+
+	if (batch.length === 1) {
+		const m = batch[0];
+		return {
+			userContent: `[${m.authorUsername}]: ${renderOne(m)}`,
+			imageParts: allImages,
+		};
+	}
+
+	// Multiple messages — present as a list. The framing tells the model that
+	// these were sent as separate Discord messages (so order/segmentation
+	// might be meaningful) but should be addressed together as one turn.
+	const sections = batch.map((m, i) => {
+		const body = renderOne(m);
+		return `**${i + 1}.** [${m.authorUsername}]: ${body}`;
+	});
+	const header = `The user sent ${batch.length} messages while I was working. They've been combined into one turn:`;
+	return {
+		userContent: `${header}\n\n${sections.join('\n\n---\n\n')}`,
+		imageParts: allImages,
+	};
+}
+
+// ─── Agent Turn ────────────────────────────────────────────────────────────
+
+interface RunAgentTurnArgs {
+	config: DiscordConfig;
+	runtime: HeadlessRuntime;
+	channelId: string;
+	/** Discord message we should anchor any thread/UI off. */
+	triggerMessage: DiscordJsMessage;
+	userContent: string;
+	imageParts: MessageImagePart[];
+	signal: AbortSignal;
+}
+
+/**
+ * Run a single agent turn against the given channel's session, posting the
+ * standard StatusLine + durable response + Done marker UX. Throws on fatal
+ * errors after rendering them in the channel.
+ *
+ * Extracted from the old `processUserMessage` so Phase 4+ can call it for
+ * forked-thread runs as well as main-channel runs.
+ */
+async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
+	const {
+		config,
+		runtime,
+		channelId,
+		triggerMessage,
+		userContent,
+		imageParts,
+		signal,
+	} = args;
+	const guildId = triggerMessage.guild?.id;
 	const conversationId = DiscordSessionStore.conversationId(channelId, guildId);
 
 	// Get or create session — existing session CWD takes priority over defaults
@@ -258,7 +426,6 @@ async function processUserMessage(
 	try {
 		process.chdir(workingDir);
 	} catch {
-		// Directory doesn't exist or isn't accessible — use default
 		process.chdir(config.workingDirectory);
 	}
 
@@ -273,45 +440,15 @@ async function processUserMessage(
 		}
 	}
 
-	// Resolve the target channel we'll be posting in.
-	const channel = message.channel;
+	const channel = triggerMessage.channel;
 	if (!('send' in channel)) return;
 	const sendableChannel = channel as TextChannel | ThreadChannel;
-
-	// ── UX model ──────────────────────────────────────────────────────────
-	// The main channel carries Derek's conversation: his text responses and
-	// the final result. It is NOT a play-by-play of tool calls.
-	//
-	// A single editable StatusLine at the bottom of the channel reflects
-	// whatever is currently happening ("🔄 Thinking…", "🔄 read_file foo.ts").
-	// It is deleted at end of run; a durable "✅ Done" marker is posted
-	// separately so channel history retains a turn boundary.
-	//
-	// Threads are NOT created by default. A queue-prompt UI will (in a
-	// follow-up step) offer the user a choice to fork current or queued
-	// work into a thread when messages pile up mid-run.
-	//
-	// Errors are NOT surfaced with dedicated error messages in the main
-	// channel unless they're fatal — we trust Derek to describe them in
-	// his follow-up text response.
-	// ──────────────────────────────────────────────────────────────────────
 
 	const statusLine = new StatusLine(sendableChannel);
 	await statusLine.update('🔄 Thinking…');
 
-	// Track whether the model is currently generating text (so we can swap
-	// status between "Thinking…" and "Running <tool>…" accurately).
 	let lastStatusPhase: 'thinking' | 'tool' | 'approval' = 'thinking';
-	// Preserve any partial streamed text — only used in the error/cancel
-	// path to give the user something to look at before the response is lost.
 	let streamBuffer = '';
-
-	const abortController = new AbortController();
-	// Register so `/stop` in this channel can interrupt us. If another run
-	// somehow registered (shouldn't happen — channelLocks serialises us), we
-	// overwrite it; the older run won't be reachable via /stop but will still
-	// finish on its own.
-	activeRuns.set(channelId, abortController);
 
 	try {
 		const result = await runtime.processMessage(
@@ -320,12 +457,7 @@ async function processUserMessage(
 			session.mode,
 			{
 				onToken: (token: string) => {
-					// We no longer stream tokens into the main channel — the final
-					// response is posted in one shot as durable messages below.
-					// Buffer anyway so /stop can show partial output.
 					streamBuffer += token;
-					// If a tool call just finished and the model is generating
-					// the next chunk of reasoning, reflect that in the status.
 					if (lastStatusPhase !== 'thinking') {
 						lastStatusPhase = 'thinking';
 						void statusLine.update('🔄 Thinking…');
@@ -338,36 +470,29 @@ async function processUserMessage(
 					);
 					return requestToolApproval(sendableChannel, toolCall);
 				},
-				onToolStart: async (toolName, args) => {
+				onToolStart: async (toolName, toolArgs) => {
 					lastStatusPhase = 'tool';
-					void statusLine.update(`🔄 ${formatToolStatus(toolName, args)}`);
+					void statusLine.update(`🔄 ${formatToolStatus(toolName, toolArgs)}`);
 				},
 				onToolResult: async () => {
-					// No-op for now. The status line will get overwritten by the
-					// next onToken ("Thinking…") or onToolStart, and the detail
-					// view (in a follow-up step) will be driven from here.
+					// No-op — next onToken or onToolStart updates the status.
 				},
 			},
-			abortController.signal,
+			signal,
 			imageParts.length > 0 ? imageParts : undefined,
 		);
 
-		// Save updated messages and mark this message as processed BEFORE
-		// any durable UI posts — if posting fails, at least history is saved.
 		await messageStore.saveMessages(conversationId, result.messages);
 		await discordSessionStore.updateSession(conversationId, {
-			lastProcessedMessageId: message.id,
+			lastProcessedMessageId: triggerMessage.id,
 		});
 
-		// Post the final response as durable message(s). Append-only: no edits.
 		const response = result.response.trim() || '*(no response)*';
 		const chunks = splitMessage(response);
 		for (const chunk of chunks) {
 			await sendableChannel.send(chunk).catch(() => {});
 		}
 
-		// Clear the transient status line and leave a durable turn-boundary
-		// marker so channel history retains a "this turn ended" receipt.
 		await statusLine.clear();
 		const toolSuffix =
 			result.toolCallCount > 0
@@ -377,18 +502,13 @@ async function processUserMessage(
 	} catch (error) {
 		const errorMsg = error instanceof Error ? error.message : String(error);
 		const wasCancelled =
-			abortController.signal.aborted ||
+			signal.aborted ||
 			errorMsg.toLowerCase().includes('cancelled') ||
 			errorMsg.toLowerCase().includes('aborted');
 
-		// Clear the status line regardless — it's transient and belongs to
-		// the aborted/failed run.
 		await statusLine.clear();
 
 		if (wasCancelled) {
-			// User-initiated stop — render as an interrupt, not an error.
-			// The in-flight user turn is intentionally NOT saved to history,
-			// so the user can send a fresh message with corrected guidance.
 			const buffered = streamBuffer.trim();
 			const tail = buffered
 				? `\n\n**Partial output before stop:**\n${truncate(buffered, 1500)}`
@@ -397,20 +517,11 @@ async function processUserMessage(
 				.send(`⏹ Stopped. Send a new message with the correction.${tail}`)
 				.catch(() => {});
 		} else {
-			// Genuine runtime error. Post as a durable message in the main
-			// channel so the user sees it; details go into the thread if one
-			// was opened.
 			await sendableChannel
 				.send(`❌ Error: ${truncate(errorMsg, 1900)}`)
 				.catch(() => {});
 		}
 	} finally {
-		// Release the /stop hook only if we're still the registered controller —
-		// avoids racing with a subsequent run that replaced us.
-		if (activeRuns.get(channelId) === abortController) {
-			activeRuns.delete(channelId);
-		}
-		// Restore previous working directory
 		process.chdir(previousCwd);
 	}
 }
@@ -829,17 +940,17 @@ async function handleSlashCommand(
 		}
 
 		case 'stop': {
-			const controller = activeRuns.get(channelId);
-			if (!controller) {
+			const state = channelStates.get(channelId);
+			if (!state || !state.active) {
 				await interaction.reply({
 					content: 'Nothing running in this channel right now.',
 					ephemeral: true,
 				});
 				return;
 			}
-			controller.abort();
-			// We don't delete from activeRuns here — processUserMessage's
-			// finally block will clean up once the abort propagates.
+			state.active.controller.abort();
+			// state.active is cleared by drainQueueAndRun's finally block
+			// once the abort propagates through runAgentTurn.
 			await interaction.reply(
 				'⏹ Stopping current run. Send a new message with the correction.',
 			);
