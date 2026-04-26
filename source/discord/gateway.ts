@@ -23,12 +23,10 @@ import {
 } from './session/discord-session.js';
 import {messageStore} from './session/message-store.js';
 import type {DiscordConfig, DiscordDevelopmentMode} from './types.js';
-import {formatSessionStatus, formatThinking} from './ui/message-formatter.js';
+import {formatSessionStatus} from './ui/message-formatter.js';
 import {splitMessage} from './ui/message-splitter.js';
-import {
-	createProgressThread,
-	type ProgressTracker,
-} from './ui/progress-thread.js';
+import {createDetailThread, type DetailThread} from './ui/progress-thread.js';
+import {StatusLine} from './ui/status-line.js';
 
 /** Per-channel processing lock to prevent concurrent responses. */
 const channelLocks = new Map<string, Promise<void>>();
@@ -39,9 +37,6 @@ const channelLocks = new Map<string, Promise<void>>();
  * can give new feedback when Derek is going down the wrong path.
  */
 const activeRuns = new Map<string, AbortController>();
-
-const STREAM_EDIT_INTERVAL_MS = 1500;
-const TOOL_CALL_THRESHOLD_FOR_THREAD = 3;
 
 /**
  * Resolve the working directory for a new session in a channel.
@@ -279,31 +274,45 @@ async function processUserMessage(
 		}
 	}
 
-	// Send typing + initial "thinking" message
+	// Resolve the target channel we'll be posting in.
 	const channel = message.channel;
 	if (!('send' in channel)) return;
 	const sendableChannel = channel as TextChannel | ThreadChannel;
-	const thinkingMsg = await sendableChannel.send(formatThinking());
-
-	// Track streaming content for edit-in-place
-	let streamBuffer = '';
-	let lastEditTime = 0;
-	let editTimer: ReturnType<typeof setTimeout> | null = null;
-	let toolCallCount = 0;
-	const state: {progressTracker: ProgressTracker | null} = {
-		progressTracker: null,
-	};
 	const isDMChannel = message.channel.type === ChannelType.DM;
 
-	const flushStreamEdit = async () => {
-		if (!streamBuffer.trim()) return;
-		const display =
-			streamBuffer.length > 1990
-				? streamBuffer.slice(streamBuffer.length - 1990)
-				: streamBuffer;
-		await thinkingMsg.edit(display).catch(() => {});
-		lastEditTime = Date.now();
-	};
+	// ── UX model ──────────────────────────────────────────────────────────
+	// The main channel carries Derek's conversation: his text responses and
+	// the final result. It is NOT a play-by-play of tool calls.
+	//
+	// A single editable StatusLine at the bottom of the channel reflects
+	// whatever is currently happening ("🔄 Thinking…", "🔄 read_file foo.ts").
+	// It is deleted at end of run; a durable "✅ Done" marker is posted
+	// separately so channel history retains a turn boundary.
+	//
+	// A DetailThread (opened lazily on the first tool call of the turn)
+	// carries the receipts: tool name + args + full result, one triplet of
+	// append-only messages per call. Turns with no tool calls never spawn
+	// a thread.
+	//
+	// Errors are NOT surfaced with dedicated error messages in the main
+	// channel — we trust Derek to describe them in his follow-up text
+	// response. The raw error is always available in the detail thread.
+	// ──────────────────────────────────────────────────────────────────────
+
+	const statusLine = new StatusLine(sendableChannel);
+	await statusLine.update('🔄 Thinking…');
+
+	// Lazily created on the first tool call. DM channels and threads-within-
+	// threads can't start threads, so we only try in regular guild text channels.
+	let detailThread: DetailThread | null = null;
+	const canCreateThread = !isDMChannel && 'startThread' in message;
+
+	// Track whether the model is currently generating text (so we can swap
+	// status between "Thinking…" and "Running <tool>…" accurately).
+	let lastStatusPhase: 'thinking' | 'tool' | 'approval' = 'thinking';
+	// Preserve any partial streamed text — only used in the error/cancel
+	// path to give the user something to look at before the response is lost.
+	let streamBuffer = '';
 
 	const abortController = new AbortController();
 	// Register so `/stop` in this channel can interrupt us. If another run
@@ -319,105 +328,92 @@ async function processUserMessage(
 			session.mode,
 			{
 				onToken: (token: string) => {
+					// We no longer stream tokens into the main channel — the final
+					// response is posted in one shot as durable messages below.
+					// Buffer anyway so /stop can show partial output.
 					streamBuffer += token;
-					const now = Date.now();
-					if (now - lastEditTime >= STREAM_EDIT_INTERVAL_MS) {
-						flushStreamEdit();
-					} else if (!editTimer) {
-						editTimer = setTimeout(
-							() => {
-								editTimer = null;
-								flushStreamEdit();
-							},
-							STREAM_EDIT_INTERVAL_MS - (now - lastEditTime),
-						);
+					// If a tool call just finished and the model is generating
+					// the next chunk of reasoning, reflect that in the status.
+					if (lastStatusPhase !== 'thinking') {
+						lastStatusPhase = 'thinking';
+						void statusLine.update('🔄 Thinking…');
 					}
 				},
 				onToolApproval: async toolCall => {
+					lastStatusPhase = 'approval';
+					void statusLine.update(
+						`⏸ Waiting for approval on \`${toolCall.function.name}\`…`,
+					);
 					return requestToolApproval(sendableChannel, toolCall);
 				},
 				onToolStart: async (toolName, args) => {
-					toolCallCount++;
-					// Create a progress thread if we hit the threshold
-					if (
-						toolCallCount === TOOL_CALL_THRESHOLD_FOR_THREAD &&
-						!state.progressTracker &&
-						!isDMChannel &&
-						'startThread' in message
-					) {
+					// Lazy thread creation on the first tool call of this turn.
+					if (!detailThread && canCreateThread) {
 						try {
-							state.progressTracker = await createProgressThread(
+							const title = truncate(userContent, 80);
+							detailThread = await createDetailThread(
 								channel as TextChannel,
 								message,
-								`Working on request from ${message.author.username}`,
+								title,
 							);
 						} catch {
-							// Thread creation can fail — not critical
+							// Thread creation can fail (perms, rate limits, etc.) —
+							// not fatal; we just won't have a detail thread for this run.
 						}
 					}
 
-					if (state.progressTracker) {
-						await state.progressTracker.addStep(`${toolName}`);
+					lastStatusPhase = 'tool';
+					void statusLine.update(`🔄 ${formatToolStatus(toolName, args)}`);
+
+					if (detailThread) {
+						await detailThread.recordStart(toolName, args);
 					}
 				},
 				onToolResult: async (toolName, resultContent, isError) => {
-					if (state.progressTracker) {
-						if (isError) {
-							await state.progressTracker.errorCurrentStep(
-								resultContent.slice(0, 100),
-							);
-						} else {
-							await state.progressTracker.completeCurrentStep();
-						}
-						await state.progressTracker.postToolResult(
-							toolName,
-							resultContent,
-							isError,
-						);
+					if (detailThread) {
+						await detailThread.recordResult(toolName, resultContent, isError);
 					}
+					// The status line will get overwritten imminently — either by
+					// onToken ("Thinking…") or onToolStart (the next tool). Leave
+					// it alone here to avoid a flicker for same-tick chains.
 				},
 			},
 			abortController.signal,
 			imageParts.length > 0 ? imageParts : undefined,
 		);
 
-		// Clear any pending edit timer
-		if (editTimer) {
-			clearTimeout(editTimer);
-		}
-
-		// Save updated messages and mark this message as processed
+		// Save updated messages and mark this message as processed BEFORE
+		// any durable UI posts — if posting fails, at least history is saved.
 		await messageStore.saveMessages(conversationId, result.messages);
 		await discordSessionStore.updateSession(conversationId, {
 			lastProcessedMessageId: message.id,
 		});
 
-		// Send final response
-		const response = result.response || '*(no response)*';
+		// Post the final response as durable message(s). Append-only: no edits.
+		const response = result.response.trim() || '*(no response)*';
 		const chunks = splitMessage(response);
-
-		// Edit the thinking message with the first chunk
-		await thinkingMsg.edit(chunks[0]).catch(() => {});
-
-		// Send remaining chunks as new messages
-		for (let i = 1; i < chunks.length; i++) {
-			await sendableChannel.send(chunks[i]);
+		for (const chunk of chunks) {
+			await sendableChannel.send(chunk).catch(() => {});
 		}
 
-		// Complete progress thread if we created one
-		if (state.progressTracker) {
-			await state.progressTracker.complete(
-				`Done — ${result.toolCallCount} tool calls executed.`,
-			);
-		}
+		// Clear the transient status line and leave a durable turn-boundary
+		// marker so channel history retains a "this turn ended" receipt.
+		await statusLine.clear();
+		const toolSuffix =
+			result.toolCallCount > 0
+				? ` · ${result.toolCallCount} tool call${result.toolCallCount === 1 ? '' : 's'}`
+				: '';
+		await sendableChannel.send(`✅ Done${toolSuffix}`).catch(() => {});
 	} catch (error) {
-		if (editTimer) clearTimeout(editTimer);
-
 		const errorMsg = error instanceof Error ? error.message : String(error);
 		const wasCancelled =
 			abortController.signal.aborted ||
 			errorMsg.toLowerCase().includes('cancelled') ||
 			errorMsg.toLowerCase().includes('aborted');
+
+		// Clear the status line regardless — it's transient and belongs to
+		// the aborted/failed run.
+		await statusLine.clear();
 
 		if (wasCancelled) {
 			// User-initiated stop — render as an interrupt, not an error.
@@ -425,21 +421,18 @@ async function processUserMessage(
 			// so the user can send a fresh message with corrected guidance.
 			const buffered = streamBuffer.trim();
 			const tail = buffered
-				? `\n\nPartial output before stop:\n${buffered.slice(-1500)}`
+				? `\n\n**Partial output before stop:**\n${truncate(buffered, 1500)}`
 				: '';
-			await thinkingMsg
-				.edit(`⏹ Stopped. Send a new message with the correction.${tail}`)
+			await sendableChannel
+				.send(`⏹ Stopped. Send a new message with the correction.${tail}`)
 				.catch(() => {});
-			if (state.progressTracker) {
-				await state.progressTracker.fail('Stopped by user');
-			}
 		} else {
-			await thinkingMsg
-				.edit(`❌ Error: ${errorMsg.slice(0, 1900)}`)
+			// Genuine runtime error. Post as a durable message in the main
+			// channel so the user sees it; details go into the thread if one
+			// was opened.
+			await sendableChannel
+				.send(`❌ Error: ${truncate(errorMsg, 1900)}`)
 				.catch(() => {});
-			if (state.progressTracker) {
-				await state.progressTracker.fail(errorMsg.slice(0, 200));
-			}
 		}
 	} finally {
 		// Release the /stop hook only if we're still the registered controller —
@@ -450,6 +443,32 @@ async function processUserMessage(
 		// Restore previous working directory
 		process.chdir(previousCwd);
 	}
+}
+
+/**
+ * Short one-line summary of a tool invocation for the status bar, e.g.
+ * "read_file source/foo.ts" or "execute_bash tsc --noEmit".
+ */
+function formatToolStatus(
+	toolName: string,
+	args: Record<string, unknown>,
+): string {
+	if (!args || typeof args !== 'object') return `\`${toolName}\``;
+	// Prefer the most identifying argument for common tools.
+	for (const key of ['path', 'file_path', 'command', 'query', 'url', 'name']) {
+		if (key in args) {
+			const v = args[key];
+			if (typeof v === 'string' && v.length > 0) {
+				return `\`${toolName}\` ${truncate(v, 80)}`;
+			}
+		}
+	}
+	return `\`${toolName}\``;
+}
+
+function truncate(s: string, max: number): string {
+	if (s.length <= max) return s;
+	return `${s.slice(0, max)}…`;
 }
 
 // ─── Project Creation ─────────────────────────────────────────────────────

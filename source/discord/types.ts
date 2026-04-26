@@ -66,17 +66,3 @@ export interface ToolApprovalRequest {
 	messageId?: string;
 	resolve: (decision: 'approve' | 'reject' | 'approve_all') => void;
 }
-
-export interface ProgressThread {
-	threadId: string;
-	progressMessageId: string;
-	steps: ProgressStep[];
-	title: string;
-	isComplete: boolean;
-}
-
-export interface ProgressStep {
-	label: string;
-	status: 'pending' | 'running' | 'complete' | 'error';
-	detail?: string;
-}
