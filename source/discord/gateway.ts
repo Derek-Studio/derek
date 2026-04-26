@@ -489,6 +489,7 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 
 	let lastStatusPhase: 'thinking' | 'tool' | 'approval' = 'thinking';
 	let streamBuffer = '';
+	let liveToolCount = 0;
 
 	try {
 		const result = await runtime.processMessage(
@@ -511,8 +512,11 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 					return requestToolApproval(sendableChannel, toolCall);
 				},
 				onToolStart: async (toolName, toolArgs) => {
+					liveToolCount++;
 					lastStatusPhase = 'tool';
-					void statusLine.update(`🔄 ${formatToolStatus(toolName, toolArgs)}`);
+					void statusLine.update(
+						`🔄 ${formatToolStatus(toolName, toolArgs, liveToolCount)}`,
+					);
 				},
 				onToolResult: async () => {
 					// No-op — next onToken or onToolStart updates the status.
@@ -573,25 +577,53 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 	}
 }
 
+/** Human-readable verb for common tool names shown in the status line. */
+const TOOL_VERBS: Record<string, string> = {
+	read_file: 'Reading',
+	write_file: 'Writing',
+	string_replace: 'Editing',
+	delete_file: 'Deleting',
+	move_file: 'Moving',
+	copy_file: 'Copying',
+	create_directory: 'Creating dir',
+	execute_bash: 'Running',
+	search_files: 'Searching',
+	glob: 'Globbing',
+	grep: 'Grepping',
+	web_fetch: 'Fetching',
+	web_search: 'Searching web',
+	git_commit: 'Committing',
+	git_push: 'Pushing',
+	git_pull: 'Pulling',
+	git_add: 'Staging',
+	git_branch: 'Branching',
+	agent: 'Spawning agent',
+	ask_user: 'Asking user',
+};
+
 /**
- * Short one-line summary of a tool invocation for the status bar, e.g.
- * "read_file source/foo.ts" or "execute_bash tsc --noEmit".
+ * Short one-line summary of a tool invocation for the status bar.
+ * Uses a human-readable verb where known, falls back to the raw tool name.
  */
 function formatToolStatus(
 	toolName: string,
 	args: Record<string, unknown>,
+	toolCount: number,
 ): string {
-	if (!args || typeof args !== 'object') return `\`${toolName}\``;
-	// Prefer the most identifying argument for common tools.
+	const verb = TOOL_VERBS[toolName] ?? toolName;
+	const countStr = `· #${toolCount}`;
+
+	if (!args || typeof args !== 'object') return `${verb} ${countStr}`;
+
 	for (const key of ['path', 'file_path', 'command', 'query', 'url', 'name']) {
 		if (key in args) {
 			const v = args[key];
 			if (typeof v === 'string' && v.length > 0) {
-				return `\`${toolName}\` ${truncate(v, 80)}`;
+				return `${verb} \`${truncate(v, 60)}\` ${countStr}`;
 			}
 		}
 	}
-	return `\`${toolName}\``;
+	return `${verb} ${countStr}`;
 }
 
 function truncate(s: string, max: number): string {
@@ -676,6 +708,41 @@ async function forkToThread({
 		imageParts,
 		signal: controller.signal,
 	});
+
+	// ── Phase 7: feed result back to parent channel ──────────────────────────
+	// Find the final assistant response from the thread's message history and
+	// post a summary to the parent channel, then inject it into the parent's
+	// history so the main agent has context on what the thread did.
+	const threadMessages = await messageStore.getMessages(forked.conversationId);
+	const lastAssistant = [...threadMessages]
+		.reverse()
+		.find(m => m.role === 'assistant' && typeof m.content === 'string');
+
+	if (lastAssistant && typeof lastAssistant.content === 'string') {
+		const responseText = lastAssistant.content.trim();
+		if (!responseText) return;
+
+		const summary = truncate(responseText, 1200);
+		const parentChannel = thread.parent;
+
+		if (parentChannel && 'send' in parentChannel) {
+			await (parentChannel as TextChannel)
+				.send(`📋 **Thread finished** · ${thread.toString()}\n${summary}`)
+				.catch(() => {});
+		}
+
+		// Inject a synthetic exchange into parent history so the next main-channel
+		// run has context on what the thread produced. Uses appendMessage so it
+		// doesn't race with an in-flight main run — the next run will read it.
+		await messageStore.appendMessage(parentConversationId, {
+			role: 'user',
+			content: `[Background thread "${thread.name}" completed. Result below.]`,
+		});
+		await messageStore.appendMessage(parentConversationId, {
+			role: 'assistant',
+			content: responseText,
+		});
+	}
 }
 
 // ─── Queue Prompt Button Handler ──────────────────────────────────────────
