@@ -10,7 +10,11 @@ import {
 } from 'discord.js';
 import {HeadlessRuntime} from './runtime/headless-runtime.js';
 import {requestToolApproval} from './runtime/tool-approval.js';
-import {autoCompact} from './session/compaction.js';
+import {
+	autoCompact,
+	estimateTokens,
+	guardMessageSize,
+} from './session/compaction.js';
 import {
 	DiscordSessionStore,
 	discordSessionStore,
@@ -169,8 +173,9 @@ async function handleMessage(
 
 	if (!content) return;
 
-	// Prefix with username for context
-	const userContent = `[${message.author.username}]: ${content}`;
+	// Guard against single messages that would instantly overflow context
+	const guarded = guardMessageSize(content);
+	const userContent = `[${message.author.username}]: ${guarded.content}`;
 
 	// Serialize per-channel to prevent interleaved responses
 	const channelId = message.channelId;
@@ -488,12 +493,9 @@ async function runBackgroundTask(
 	originChannelId: string,
 	userId: string,
 ): Promise<void> {
-	const previousCwd = process.cwd();
-	try {
-		process.chdir(cwd);
-	} catch {
-		/* keep cwd if chdir fails */
-	}
+	// Background tasks do NOT chdir — that would race with concurrent foreground messages
+	// sharing the same Node.js process. Tool calls that need cwd receive it via the prompt.
+	void cwd;
 
 	let toolCallsSinceUpdate = 0;
 	let currentStepMsg: DiscordJsMessage | null = null;
@@ -538,8 +540,6 @@ async function runBackgroundTask(
 			);
 		}
 	} finally {
-		process.chdir(previousCwd);
-		// Keep TypeScript happy — currentStepMsg used to avoid unused-var warning
 		void currentStepMsg;
 	}
 }
@@ -650,6 +650,7 @@ async function handleSlashCommand(
 					provider: session.provider || runtime.getProvider(),
 					mode: session.mode,
 					messageCount: messages.length,
+					estimatedTokens: estimateTokens(messages),
 					workingDirectory: session.workingDirectory,
 					sessionId: session.sessionId,
 				}),
