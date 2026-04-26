@@ -155,6 +155,7 @@ export class HeadlessRuntime {
 		mode: DiscordDevelopmentMode,
 		callbacks: RuntimeCallbacks,
 		signal?: AbortSignal,
+		imageParts?: import('@/types/core').MessageImagePart[],
 	): Promise<ProcessMessageResult> {
 		if (!this.client || !this.toolManager) {
 			throw new Error('Runtime not initialized. Call initialize() first.');
@@ -163,7 +164,11 @@ export class HeadlessRuntime {
 		const client = this.client;
 
 		// Append user message
-		const userMessage: Message = {role: 'user', content: userContent};
+		const userMessage: Message = {
+			role: 'user',
+			content: userContent,
+			...(imageParts?.length ? {imageParts} : {}),
+		};
 		messages.push(userMessage);
 
 		// Build system prompt
@@ -221,6 +226,10 @@ export class HeadlessRuntime {
 					),
 				signal,
 			);
+
+			// Abort may have fired while the stream was already buffered — check
+			// before we process or post the response.
+			if (signal?.aborted) throw new Error('Operation was cancelled');
 
 			if (!result?.choices?.[0]) {
 				const dump = result
@@ -319,6 +328,8 @@ export class HeadlessRuntime {
 
 			// Add tool results to messages
 			messages.push(...toolResults);
+
+			if (signal?.aborted) throw new Error('Operation was cancelled');
 
 			// If the model produced text AND tool calls, capture the text
 			// (the final response will be whatever comes after the last tool loop)

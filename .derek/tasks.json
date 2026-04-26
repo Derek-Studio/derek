@@ -1,1 +1,64 @@
-[]
+[
+	{
+		"id": "5c30b1bf",
+		"title": "Add source/discord/attachments.ts helper",
+		"description": "Classify image vs text attachments, fetch text content, produce imageParts + fenced text blocks",
+		"status": "completed",
+		"createdAt": "2026-04-26T15:35:56.991Z",
+		"updatedAt": "2026-04-26T15:36:50.206Z",
+		"completedAt": "2026-04-26T15:36:50.206Z"
+	},
+	{
+		"id": "32afbb30",
+		"title": "Wire attachments into gateway.ts handleMessage/processUserMessage",
+		"description": "Allow empty content if attachments present; append text blocks; forward imageParts to runtime.processMessage",
+		"status": "completed",
+		"createdAt": "2026-04-26T15:35:56.991Z",
+		"updatedAt": "2026-04-26T15:37:19.162Z",
+		"completedAt": "2026-04-26T15:37:19.162Z"
+	},
+	{
+		"id": "7b721f4f",
+		"title": "Typecheck",
+		"description": "Run tsc and fix any issues",
+		"status": "completed",
+		"createdAt": "2026-04-26T15:35:56.991Z",
+		"updatedAt": "2026-04-26T15:38:47.397Z",
+		"completedAt": "2026-04-26T15:38:47.397Z"
+	},
+	{
+		"id": "50409ec2",
+		"title": "Register /stop slash command in registry.ts",
+		"status": "pending",
+		"createdAt": "2026-04-26T15:48:47.767Z",
+		"updatedAt": "2026-04-26T15:48:47.767Z"
+	},
+	{
+		"id": "493c7c0b",
+		"title": "Add channel→AbortController map + register/unregister in processUserMessage",
+		"status": "pending",
+		"createdAt": "2026-04-26T15:48:47.767Z",
+		"updatedAt": "2026-04-26T15:48:47.767Z"
+	},
+	{
+		"id": "1a6d799e",
+		"title": "Handle /stop in handleSlashCommand",
+		"status": "pending",
+		"createdAt": "2026-04-26T15:48:47.767Z",
+		"updatedAt": "2026-04-26T15:48:47.767Z"
+	},
+	{
+		"id": "da97da33",
+		"title": "Special-case cancelled error rendering in processUserMessage",
+		"status": "pending",
+		"createdAt": "2026-04-26T15:48:47.767Z",
+		"updatedAt": "2026-04-26T15:48:47.767Z"
+	},
+	{
+		"id": "d25a4a8b",
+		"title": "Typecheck + build",
+		"status": "pending",
+		"createdAt": "2026-04-26T15:48:47.767Z",
+		"updatedAt": "2026-04-26T15:48:47.767Z"
+	}
+]

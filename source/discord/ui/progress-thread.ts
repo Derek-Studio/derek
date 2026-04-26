@@ -3,49 +3,39 @@ import type {
 	TextChannel,
 	ThreadChannel,
 } from 'discord.js';
-import type {ProgressStep} from '../types.js';
-import {formatProgress, formatToolResult} from './message-formatter.js';
-
-const EDIT_THROTTLE_MS = 2000; // Don't edit faster than every 2s
 
 /**
- * Create a progress thread for a long-running task.
- * Returns a ProgressTracker that can be used to update progress.
+ * A detail thread opened off a user's trigger message. Accumulates the
+ * full per-tool-call record (start line, args, result) as append-only
+ * messages — no edits, no progress bar, no step list. The main channel
+ * carries Derek's conversation; this thread carries the receipts.
+ *
+ * Created lazily on the first tool call of a run (see gateway.ts). Turns
+ * with no tool calls never spawn a thread.
  */
-export async function createProgressThread(
-	channel: TextChannel,
+
+const MAX_RESULT_BYTES = 1800; // leave slack under the 2000 Discord limit
+const MAX_ARGS_BYTES = 1800;
+
+export async function createDetailThread(
+	_channel: TextChannel,
 	triggerMessage: DiscordJsMessage,
 	title: string,
-): Promise<ProgressTracker> {
-	// Create thread from the trigger message
+): Promise<DetailThread> {
 	const thread = await triggerMessage.startThread({
 		name: `🔧 ${title.slice(0, 95)}`,
 		autoArchiveDuration: 60,
 	});
-
-	// Post initial progress message
-	const progressMsg = await thread.send(formatProgress([], `⏳ ${title}`));
-
-	return new ProgressTracker(thread, progressMsg, title);
+	return new DetailThread(thread);
 }
 
-export class ProgressTracker {
+export class DetailThread {
 	private thread: ThreadChannel;
-	private progressMessage: DiscordJsMessage;
-	private steps: ProgressStep[] = [];
-	private title: string;
-	private lastEditTime = 0;
-	private pendingEdit = false;
-	private editTimer: ReturnType<typeof setTimeout> | null = null;
+	/** Counter so successive tool calls are numbered inside the thread. */
+	private toolIndex = 0;
 
-	constructor(
-		thread: ThreadChannel,
-		progressMessage: DiscordJsMessage,
-		title: string,
-	) {
+	constructor(thread: ThreadChannel) {
 		this.thread = thread;
-		this.progressMessage = progressMessage;
-		this.title = title;
 	}
 
 	getThread(): ThreadChannel {
@@ -53,124 +43,71 @@ export class ProgressTracker {
 	}
 
 	/**
-	 * Add a step and update the progress message.
+	 * Announce that a tool is about to run. Posts two messages: a header
+	 * with the tool name and index, and the formatted args. The result
+	 * gets posted separately via `recordResult` once the tool completes.
 	 */
-	async addStep(label: string): Promise<void> {
-		// Mark any currently running step as complete
-		for (const step of this.steps) {
-			if (step.status === 'running') {
-				step.status = 'complete';
-			}
-		}
+	async recordStart(
+		toolName: string,
+		args: Record<string, unknown>,
+	): Promise<void> {
+		this.toolIndex++;
+		const n = this.toolIndex;
 
-		this.steps.push({label, status: 'running'});
-		await this.updateProgress();
-	}
+		const header = `**${n}. 🔧 \`${toolName}\`**`;
+		await this.thread.send(header).catch(() => {});
 
-	/**
-	 * Complete the current step.
-	 */
-	async completeCurrentStep(): Promise<void> {
-		const current = this.steps.find(s => s.status === 'running');
-		if (current) {
-			current.status = 'complete';
-			await this.updateProgress();
+		const argsFormatted = formatArgs(args);
+		if (argsFormatted) {
+			await this.thread.send(argsFormatted).catch(() => {});
 		}
 	}
 
 	/**
-	 * Mark the current step as errored.
+	 * Post the formatted result of the tool call that was just announced
+	 * via `recordStart`. One message — the third in the triplet.
 	 */
-	async errorCurrentStep(detail?: string): Promise<void> {
-		const current = this.steps.find(s => s.status === 'running');
-		if (current) {
-			current.status = 'error';
-			current.detail = detail;
-			await this.updateProgress();
-		}
-	}
-
-	/**
-	 * Post a detailed message in the thread (e.g., tool output).
-	 */
-	async postDetail(content: string): Promise<void> {
-		const truncated =
-			content.length > 1900 ? content.slice(0, 1900) + '\n…' : content;
-		await this.thread.send(truncated).catch(() => {});
-	}
-
-	/**
-	 * Post a tool result in the thread.
-	 */
-	async postToolResult(
+	async recordResult(
 		toolName: string,
 		result: string,
 		isError: boolean,
 	): Promise<void> {
-		const formatted = formatToolResult(toolName, result, isError);
-		// Split if too long
-		if (formatted.length <= 2000) {
-			await this.thread.send(formatted).catch(() => {});
-		} else {
-			await this.thread
-				.send(`${isError ? '❌' : '✅'} **${toolName}** (output truncated)`)
-				.catch(() => {});
-		}
+		const icon = isError ? '❌' : '✅';
+		const body = formatResultBody(result);
+		await this.thread.send(`${icon} **${toolName}**\n${body}`).catch(() => {});
+	}
+}
+
+/**
+ * Format tool arguments as a fenced JSON block, truncated if necessary.
+ * Returns empty string for arg-less tools.
+ */
+function formatArgs(args: Record<string, unknown>): string {
+	if (!args || typeof args !== 'object') return '';
+	const keys = Object.keys(args);
+	if (keys.length === 0) return '';
+
+	let json: string;
+	try {
+		json = JSON.stringify(args, null, 2);
+	} catch {
+		json = String(args);
 	}
 
-	/**
-	 * Mark the entire task as complete.
-	 */
-	async complete(summary?: string): Promise<void> {
-		// Mark any remaining running steps as complete
-		for (const step of this.steps) {
-			if (step.status === 'running') {
-				step.status = 'complete';
-			}
-		}
-
-		const text = formatProgress(this.steps, `✅ ${this.title}`);
-		await this.progressMessage
-			.edit(summary ? `${text}\n\n${summary}` : text)
-			.catch(() => {});
+	if (json.length > MAX_ARGS_BYTES) {
+		json = `${json.slice(0, MAX_ARGS_BYTES)}\n… (truncated)`;
 	}
+	return `\`\`\`json\n${json}\n\`\`\``;
+}
 
-	/**
-	 * Mark the entire task as failed.
-	 */
-	async fail(error: string): Promise<void> {
-		for (const step of this.steps) {
-			if (step.status === 'running') {
-				step.status = 'error';
-				step.detail = error;
-			}
-		}
-
-		const text = formatProgress(this.steps, `❌ ${this.title}`);
-		await this.progressMessage.edit(text).catch(() => {});
+/**
+ * Format the result content as a code block, truncating and noting the
+ * clip if the result is too large for a single Discord message.
+ */
+function formatResultBody(result: string): string {
+	if (!result) return '*(no output)*';
+	if (result.length <= MAX_RESULT_BYTES) {
+		return `\`\`\`\n${result}\n\`\`\``;
 	}
-
-	private async updateProgress(): Promise<void> {
-		const now = Date.now();
-		if (now - this.lastEditTime < EDIT_THROTTLE_MS) {
-			// Throttle edits — schedule one for later
-			if (!this.editTimer) {
-				this.editTimer = setTimeout(
-					async () => {
-						this.editTimer = null;
-						await this.doEdit();
-					},
-					EDIT_THROTTLE_MS - (now - this.lastEditTime),
-				);
-			}
-			return;
-		}
-		await this.doEdit();
-	}
-
-	private async doEdit(): Promise<void> {
-		this.lastEditTime = Date.now();
-		const text = formatProgress(this.steps, `⏳ ${this.title}`);
-		await this.progressMessage.edit(text).catch(() => {});
-	}
+	return `\`\`\`\n${result.slice(0, MAX_RESULT_BYTES)}\n\`\`\`\n…(output truncated, ${result.length} chars total)`;
 }
