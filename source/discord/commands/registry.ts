@@ -98,6 +98,16 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
 			.setDescription(
 				'Interrupt the in-progress response in this channel so you can give new feedback',
 			)
+			.addStringOption(opt =>
+				opt
+					.setName('scope')
+					.setDescription('What to stop (default: this channel only)')
+					.setRequired(false)
+					.addChoices(
+						{name: 'channel — stop this channel only', value: 'channel'},
+						{name: 'all — stop every active run and thread', value: 'all'},
+					),
+			)
 			.toJSON(),
 
 		new SlashCommandBuilder()

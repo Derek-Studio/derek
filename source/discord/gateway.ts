@@ -1259,6 +1259,32 @@ async function handleSlashCommand(
 		}
 
 		case 'stop': {
+			const scope = interaction.options.getString('scope') ?? 'channel';
+
+			if (scope === 'all') {
+				let stopped = 0;
+				for (const state of channelStates.values()) {
+					if (state.active) {
+						state.active.controller.abort();
+						if (state.queuePrompt) {
+							void state.queuePrompt.dismiss();
+							state.queuePrompt = null;
+						}
+						state.queued = [];
+						stopped++;
+					}
+				}
+				await interaction.reply({
+					content:
+						stopped > 0
+							? `⏹ Stopped ${stopped} active run${stopped === 1 ? '' : 's'} across all channels and threads.`
+							: 'Nothing running anywhere right now.',
+					ephemeral: true,
+				});
+				break;
+			}
+
+			// Default: channel scope
 			const state = channelStates.get(channelId);
 			if (!state || !state.active) {
 				await interaction.reply({
@@ -1268,14 +1294,11 @@ async function handleSlashCommand(
 				return;
 			}
 			state.active.controller.abort();
-			// Clear the queue so drained messages don't auto-run after the stop.
 			if (state.queuePrompt) {
 				void state.queuePrompt.dismiss();
 				state.queuePrompt = null;
 			}
 			state.queued = [];
-			// state.active is cleared by drainQueueAndRun's finally block
-			// once the abort propagates through runAgentTurn.
 			await interaction.reply({content: '⏹ Stopping.', ephemeral: true});
 			break;
 		}
