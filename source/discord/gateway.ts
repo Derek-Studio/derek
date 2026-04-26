@@ -125,7 +125,7 @@ export function setupGatewayHandlers(
 	});
 
 	// On startup, process any messages that arrived while the bot was offline
-	client.once('ready', () => {
+	client.once('clientReady', () => {
 		replayMissedMessages(client, config, runtime).catch(err => {
 			console.error('Error replaying missed messages:', err);
 		});
