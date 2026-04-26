@@ -425,6 +425,8 @@ interface RunAgentTurnArgs {
 	userContent: string;
 	imageParts: MessageImagePart[];
 	signal: AbortSignal;
+	/** Override where status + response messages are sent (used for forked threads). */
+	sendTo?: TextChannel | ThreadChannel;
 }
 
 /**
@@ -480,7 +482,7 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 		}
 	}
 
-	const channel = triggerMessage.channel;
+	const channel = args.sendTo ?? triggerMessage.channel;
 	if (!('send' in channel)) return;
 	const sendableChannel = channel as TextChannel | ThreadChannel;
 
@@ -707,6 +709,7 @@ async function forkToThread({
 		userContent,
 		imageParts,
 		signal: controller.signal,
+		sendTo: thread,
 	});
 
 	// ── Phase 7: feed result back to parent channel ──────────────────────────
