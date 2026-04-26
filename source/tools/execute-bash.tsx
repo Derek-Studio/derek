@@ -2,7 +2,7 @@ import {Box, Text} from 'ink';
 import React from 'react';
 
 import BashProgress from '@/components/bash-progress';
-import {isNanocoderToolAlwaysAllowed} from '@/config/nanocoder-tools-config';
+import {isDerekToolAlwaysAllowed} from '@/config/derek-tools-config';
 import {TRUNCATION_OUTPUT_LIMIT} from '@/constants';
 import {getCurrentMode} from '@/context/mode-context';
 import {useTerminalWidth} from '@/hooks/useTerminalWidth';
@@ -78,10 +78,10 @@ const executeBashCoreTool = tool({
 		},
 		required: ['command'],
 	}),
-	// High risk: bash commands require approval unless explicitly configured in nanocoderTools.alwaysAllow
+	// High risk: bash commands require approval unless explicitly configured in derekTools.alwaysAllow
 	needsApproval: () => {
 		// Check if this tool is configured to always be allowed
-		if (isNanocoderToolAlwaysAllowed('execute_bash')) {
+		if (isDerekToolAlwaysAllowed('execute_bash')) {
 			return false;
 		}
 

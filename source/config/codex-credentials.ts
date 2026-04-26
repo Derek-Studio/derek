@@ -1,7 +1,7 @@
 /**
  * User-level storage for ChatGPT/Codex OAuth credentials.
  * Stores access token, refresh token, expiry, and account ID.
- * Stored under config path (e.g. ~/.config/nanocoder/) so they are not in project config.
+ * Stored under config path (e.g. ~/.config/derek/) so they are not in project config.
  */
 
 import {
@@ -19,7 +19,7 @@ const FILENAME = 'codex-credentials.json';
 
 /** Shared message when no Codex credential is found. */
 export function getCodexNoCredentialsMessage(providerName: string): string {
-	return `No Codex credentials for "${providerName}". Type /codex-login in the chat to log in, or run: nanocoder codex login`;
+	return `No Codex credentials for "${providerName}". Type /codex-login in the chat to log in, or run: derek codex login`;
 }
 
 export interface CodexCredential {

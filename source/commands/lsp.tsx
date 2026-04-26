@@ -44,7 +44,7 @@ export function LSP({status}: LSPProps) {
 					<Box marginTop={1} marginBottom={1}>
 						<Text color={colors.secondary}>
 							{`{
-  "nanocoder": {
+  "derek": {
     "lsp": {
       "servers": [
         {

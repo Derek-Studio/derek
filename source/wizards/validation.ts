@@ -28,7 +28,7 @@ export function validateConfig(
 	// Validate providers
 	if (providers.length === 0) {
 		warnings.push(
-			'No providers configured. Nanocoder requires at least one provider to function.',
+			'No providers configured. Derek requires at least one provider to function.',
 		);
 	}
 
@@ -145,7 +145,7 @@ export async function testProviderConnection(
  * Provider configuration object format (for agents.config.json)
  */
 interface ProviderConfigObject {
-	nanocoder: {
+	derek: {
 		providers: Array<{
 			name: string;
 			models: string[];
@@ -173,7 +173,7 @@ export function buildProviderConfigObject(
 	providers: ProviderConfig[],
 ): ProviderConfigObject {
 	const config: ProviderConfigObject = {
-		nanocoder: {
+		derek: {
 			providers: providers.map(p => {
 				const providerConfig: {
 					name: string;
@@ -245,7 +245,7 @@ export function buildConfigObject(
 	providers: ProviderConfig[],
 	mcpServers: Record<string, McpServerConfig>,
 ): ProviderConfigObject & {
-	nanocoder: {
+	derek: {
 		providers: Array<{
 			name: string;
 			models: string[];
@@ -259,7 +259,7 @@ export function buildConfigObject(
 	};
 } {
 	const config: ProviderConfigObject & {
-		nanocoder: {
+		derek: {
 			providers: Array<{
 				name: string;
 				models: string[];
@@ -272,7 +272,7 @@ export function buildConfigObject(
 			mcpServers?: McpServerConfig[];
 		};
 	} = {
-		nanocoder: {
+		derek: {
 			providers: providers.map(p => {
 				const providerConfig: {
 					name: string;
@@ -314,7 +314,7 @@ export function buildConfigObject(
 
 	// Add MCP servers if any - convert Record<string, McpServerConfig> to new array format
 	if (Object.keys(mcpServers).length > 0) {
-		config.nanocoder.mcpServers = Object.values(mcpServers).map(server => ({
+		config.derek.mcpServers = Object.values(mcpServers).map(server => ({
 			name: server.name,
 			transport: server.transport || 'stdio', // Default to stdio for backward compatibility
 			command: server.command,

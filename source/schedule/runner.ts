@@ -124,17 +124,17 @@ export class ScheduleRunner {
 			// Clear messages for fresh context
 			await this.callbacks.clearMessages();
 
-			// Load the schedule file from .nanocoder/schedules/
+			// Load the schedule file from .derek/schedules/
 			const filePath = join(
 				process.cwd(),
-				'.nanocoder',
+				'.derek',
 				'schedules',
 				schedule.command,
 			);
 
 			if (!existsSync(filePath)) {
 				throw new Error(
-					`Schedule file not found: ${schedule.command}. Ensure it exists in .nanocoder/schedules/`,
+					`Schedule file not found: ${schedule.command}. Ensure it exists in .derek/schedules/`,
 				);
 			}
 

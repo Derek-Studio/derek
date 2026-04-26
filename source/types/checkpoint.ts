@@ -10,7 +10,11 @@ export interface CheckpointMetadata {
 		model: string;
 	};
 	description?: string; // Optional: first message or custom
-	gitCommitHash?: string; // Optional: for future git integration
+	gitState?: {
+		branch: string;
+		commitHash: string;
+		hasUncommittedChanges: boolean;
+	};
 }
 
 export interface CheckpointConversation {

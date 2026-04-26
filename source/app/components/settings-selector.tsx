@@ -6,10 +6,10 @@ import {useMemo, useState} from 'react';
 import type {TitleShape} from '@/components/ui/styled-title';
 import {TitledBoxWithPreferences} from '@/components/ui/titled-box';
 import {
-	getNanocoderShape,
+	getDerekShape,
 	getNotificationsPreference,
 	getPasteThreshold,
-	updateNanocoderShape,
+	updateDerekShape,
 	updateNotificationsPreference,
 	updatePasteThreshold,
 } from '@/config/preferences';
@@ -18,7 +18,7 @@ import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useTitleShape} from '@/hooks/useTitleShape';
 import type {NotificationsConfig} from '@/types/config';
-import type {NanocoderShape, ThemePreset} from '@/types/ui';
+import type {DerekShape, ThemePreset} from '@/types/ui';
 import {setNotificationsConfig} from '@/utils/notifications';
 import {DEFAULT_SINGLE_LINE_PASTE_THRESHOLD} from '@/utils/paste-utils';
 
@@ -26,7 +26,7 @@ type SettingsStep =
 	| 'main'
 	| 'theme'
 	| 'title-shape'
-	| 'nanocoder-shape'
+	| 'derek-shape'
 	| 'paste-threshold'
 	| 'notifications'
 	| 'done';
@@ -64,8 +64,8 @@ function SettingsMainMenu({
 			description: 'Customize box title styles',
 		},
 		{
-			label: 'Nanocoder Shape',
-			value: 'nanocoder-shape',
+			label: 'Derek Shape',
+			value: 'derek-shape',
 			description: 'Change welcome banner font',
 		},
 		{
@@ -449,8 +449,8 @@ function SettingsTitleShapePanel({
 	);
 }
 
-// Nanocoder Shape settings panel
-function SettingsNanocoderShapePanel({
+// Derek Shape settings panel
+function SettingsDerekShapePanel({
 	onBack,
 	onCancel,
 }: {
@@ -460,11 +460,10 @@ function SettingsNanocoderShapePanel({
 	const {boxWidth, isNarrow} = useResponsiveTerminal();
 	const {colors} = useTheme();
 
-	const savedShape = getNanocoderShape();
-	const initialShape: NanocoderShape = savedShape ?? 'tiny';
-	const [originalShape] = useState<NanocoderShape>(initialShape);
-	const [previewShape, setPreviewShape] =
-		useState<NanocoderShape>(initialShape);
+	const savedShape = getDerekShape();
+	const initialShape: DerekShape = savedShape ?? 'tiny';
+	const [originalShape] = useState<DerekShape>(initialShape);
+	const [previewShape, setPreviewShape] = useState<DerekShape>(initialShape);
 
 	useInput((_, key) => {
 		if (key.escape) {
@@ -475,7 +474,7 @@ function SettingsNanocoderShapePanel({
 		}
 	});
 
-	const shapeOptions: {label: string; value: NanocoderShape}[] = useMemo(
+	const shapeOptions: {label: string; value: DerekShape}[] = useMemo(
 		() => [
 			{label: 'Tiny (default)', value: 'tiny'},
 			{label: 'Block', value: 'block'},
@@ -500,16 +499,16 @@ function SettingsNanocoderShapePanel({
 		return index >= 0 ? index : 0;
 	}, [originalShape, shapeOptions]);
 
-	const handleSelect = (item: {label: string; value: NanocoderShape}) => {
-		updateNanocoderShape(item.value);
+	const handleSelect = (item: {label: string; value: DerekShape}) => {
+		updateDerekShape(item.value);
 		onBack();
 	};
 
-	const handleHighlight = (item: {label: string; value: NanocoderShape}) => {
+	const handleHighlight = (item: {label: string; value: DerekShape}) => {
 		setPreviewShape(item.value);
 	};
 
-	const displayText = isNarrow ? 'NC' : 'Nanocoder';
+	const displayText = isNarrow ? 'NC' : 'Derek';
 
 	// Narrow terminal: simplified layout with BigText outside box
 	if (isNarrow) {
@@ -519,7 +518,7 @@ function SettingsNanocoderShapePanel({
 					<BigText text={displayText} font={previewShape} />
 				</Gradient>
 				<TitledBoxWithPreferences
-					title="Nanocoder Shape"
+					title="Derek Shape"
 					width="100%"
 					borderColor={colors.primary}
 					paddingX={2}
@@ -813,9 +812,9 @@ export function SettingsSelector({onCancel}: SettingsSelectorProps) {
 					onCancel={onCancel}
 				/>
 			);
-		case 'nanocoder-shape':
+		case 'derek-shape':
 			return (
-				<SettingsNanocoderShapePanel
+				<SettingsDerekShapePanel
 					onBack={() => setStep('main')}
 					onCancel={onCancel}
 				/>

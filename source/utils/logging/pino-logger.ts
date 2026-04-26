@@ -69,7 +69,7 @@ function createEnvironmentLogger(
 			.format(now)
 			.replace(/\//g, '-');
 
-		const logFilePath = join(logDir, `nanocoder-${localDate}.log`);
+		const logFilePath = join(logDir, `derek-${localDate}.log`);
 
 		// Use pino.destination() instead of pino.transport() for synchronous flush support
 		const destination = pino.destination({
@@ -269,7 +269,7 @@ export function createPinoLogger(config?: Partial<LoggerConfig>): Logger {
 			pid: process.pid,
 			platform: process.platform,
 			arch: process.arch,
-			service: 'nanocoder',
+			service: 'derek',
 			version: process.env.npm_package_version || 'unknown',
 			environment: process.env.NODE_ENV || 'production',
 			nodeVersion: process.version,
@@ -310,7 +310,7 @@ export function createLoggerWithTransport(
 			pid: process.pid,
 			platform: process.platform,
 			arch: process.arch,
-			service: 'nanocoder',
+			service: 'derek',
 			version: process.env.npm_package_version || 'unknown',
 			environment: process.env.NODE_ENV || 'production',
 			nodeVersion: process.version,

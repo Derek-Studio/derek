@@ -1,7 +1,7 @@
 /**
  * VS Code integration module
  *
- * Provides WebSocket-based communication between the nanocoder CLI
+ * Provides WebSocket-based communication between the derek CLI
  * and the VS Code extension for:
  * - Live diff previews
  * - File change approvals

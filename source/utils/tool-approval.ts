@@ -1,4 +1,4 @@
-import {isNanocoderToolAlwaysAllowed} from '@/config/nanocoder-tools-config';
+import {isDerekToolAlwaysAllowed} from '@/config/derek-tools-config';
 import {getCurrentMode} from '@/context/mode-context';
 
 /**
@@ -7,7 +7,7 @@ import {getCurrentMode} from '@/context/mode-context';
  */
 export function createFileToolApproval(toolName: string): () => boolean {
 	return () => {
-		if (isNanocoderToolAlwaysAllowed(toolName)) return false;
+		if (isDerekToolAlwaysAllowed(toolName)) return false;
 		const mode = getCurrentMode();
 		return mode !== 'auto-accept' && mode !== 'yolo' && mode !== 'scheduler';
 	};

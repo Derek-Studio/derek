@@ -172,11 +172,18 @@ export interface ModeOverrides {
 	modelParameters?: import('@/types/config').ModelParameters;
 }
 
+export interface FallbackStep {
+	model: string;
+	afterRetries: number; // retries on previous model before switching
+	maxRetries: number; // retries on this model
+}
+
 export interface LLMClient {
 	getCurrentModel(): string;
 	setModel(model: string): void;
 	getContextSize(): number;
 	getAvailableModels(): Promise<string[]>;
+	getFallbackConfig(): FallbackStep[] | undefined;
 	chat(
 		messages: Message[],
 		tools: Record<string, AISDKCoreTool>,

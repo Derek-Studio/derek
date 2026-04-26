@@ -24,6 +24,12 @@ export interface SubagentConfig {
 	disallowedTools?: string[];
 	/** System prompt / instructions for the subagent */
 	systemPrompt: string;
+	/** Maximum number of retry attempts for failed executions (default: 3) */
+	maxRetries?: number;
+	/** Enable exponential backoff for retries (default: true) */
+	exponentialBackoff?: boolean;
+	/** Base delay in milliseconds for exponential backoff (default: 1000) */
+	baseDelayMs?: number;
 }
 
 /**
@@ -82,9 +88,9 @@ export interface SubagentContext {
 export enum SubagentLoadPriority {
 	/** Built-in defaults (lowest priority) */
 	BuiltIn = 0,
-	/** User-level configuration (~/.config/nanocoder/agents/) */
+	/** User-level configuration (~/.config/derek/agents/) */
 	User = 1,
-	/** Project-level configuration (.nanocoder/agents/) (highest priority) */
+	/** Project-level configuration (.derek/agents/) (highest priority) */
 	Project = 2,
 }
 
@@ -125,6 +131,12 @@ export interface SubagentFrontmatter {
 	tools?: string[];
 	/** Disallowed tools */
 	disallowedTools?: string[];
+	/** Maximum number of retry attempts */
+	maxRetries?: number;
+	/** Enable exponential backoff for retries */
+	exponentialBackoff?: boolean;
+	/** Base delay in milliseconds for exponential backoff */
+	baseDelayMs?: number;
 }
 
 /**

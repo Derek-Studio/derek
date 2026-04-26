@@ -4,14 +4,14 @@ import {join} from 'node:path';
 import test from 'ava';
 import {
 	getLastUsedModel,
-	getNanocoderShape,
+	getDerekShape,
 	getNotificationsPreference,
 	getPasteThreshold,
 	loadPreferences,
 	resetPreferencesCache,
 	savePreferences,
 	updateLastUsed,
-	updateNanocoderShape,
+	updateDerekShape,
 	updateNotificationsPreference,
 	updatePasteThreshold,
 } from './preferences';
@@ -604,24 +604,24 @@ test.serial('loadPreferences handles file with only whitespace', t => {
 });
 
 // ============================================================================
-// updateNanocoderShape Tests
+// updateDerekShape Tests
 // ============================================================================
 
-test.serial('updateNanocoderShape saves nanocoder shape', t => {
+test.serial('updateDerekShape saves nanocoder shape', t => {
 	const preferencesPath = getTestPreferencesPath();
 	if (existsSync(preferencesPath)) {
 		rmSync(preferencesPath, {force: true});
 	}
 
 	try {
-		updateNanocoderShape('block');
+		updateDerekShape('block');
 
 		t.true(existsSync(preferencesPath));
 
 		const content = readFileSync(preferencesPath, 'utf-8');
 		const parsed = JSON.parse(content) as UserPreferences;
 
-		t.is(parsed.nanocoderShape, 'block');
+		t.is(parsed.derekShape, 'block');
 	} finally {
 		if (existsSync(preferencesPath)) {
 			rmSync(preferencesPath, {force: true});
@@ -629,7 +629,7 @@ test.serial('updateNanocoderShape saves nanocoder shape', t => {
 	}
 });
 
-test.serial('updateNanocoderShape preserves existing preferences', t => {
+test.serial('updateDerekShape preserves existing preferences', t => {
 	const preferencesPath = getTestPreferencesPath();
 	const existingPreferences: UserPreferences = {
 		lastProvider: 'openrouter',
@@ -639,12 +639,12 @@ test.serial('updateNanocoderShape preserves existing preferences', t => {
 	writeFileSync(preferencesPath, JSON.stringify(existingPreferences, null, 2), 'utf-8');
 
 	try {
-		updateNanocoderShape('chrome');
+		updateDerekShape('chrome');
 
 		const content = readFileSync(preferencesPath, 'utf-8');
 		const parsed = JSON.parse(content) as UserPreferences;
 
-		t.is(parsed.nanocoderShape, 'chrome');
+		t.is(parsed.derekShape, 'chrome');
 		t.is(parsed.lastProvider, 'openrouter');
 		t.is(parsed.lastModel, 'claude-3-opus');
 		t.is(parsed.selectedTheme, 'tokyo-night');
@@ -655,20 +655,20 @@ test.serial('updateNanocoderShape preserves existing preferences', t => {
 	}
 });
 
-test.serial('updateNanocoderShape overwrites existing nanocoder shape', t => {
+test.serial('updateDerekShape overwrites existing nanocoder shape', t => {
 	const preferencesPath = getTestPreferencesPath();
 	const existingPreferences: UserPreferences = {
-		nanocoderShape: 'tiny',
+		derekShape: 'tiny',
 	};
 	writeFileSync(preferencesPath, JSON.stringify(existingPreferences, null, 2), 'utf-8');
 
 	try {
-		updateNanocoderShape('huge');
+		updateDerekShape('huge');
 
 		const content = readFileSync(preferencesPath, 'utf-8');
 		const parsed = JSON.parse(content) as UserPreferences;
 
-		t.is(parsed.nanocoderShape, 'huge');
+		t.is(parsed.derekShape, 'huge');
 	} finally {
 		if (existsSync(preferencesPath)) {
 			rmSync(preferencesPath, {force: true});
@@ -677,18 +677,18 @@ test.serial('updateNanocoderShape overwrites existing nanocoder shape', t => {
 });
 
 // ============================================================================
-// getNanocoderShape Tests
+// getDerekShape Tests
 // ============================================================================
 
-test.serial('getNanocoderShape returns saved nanocoder shape', t => {
+test.serial('getDerekShape returns saved nanocoder shape', t => {
 	const preferencesPath = getTestPreferencesPath();
 	const preferences: UserPreferences = {
-		nanocoderShape: 'slick',
+		derekShape: 'slick',
 	};
 	writeFileSync(preferencesPath, JSON.stringify(preferences, null, 2), 'utf-8');
 
 	try {
-		const result = getNanocoderShape();
+		const result = getDerekShape();
 		t.is(result, 'slick');
 	} finally {
 		if (existsSync(preferencesPath)) {
@@ -697,13 +697,13 @@ test.serial('getNanocoderShape returns saved nanocoder shape', t => {
 	}
 });
 
-test.serial('getNanocoderShape returns undefined when not set', t => {
+test.serial('getDerekShape returns undefined when not set', t => {
 	const preferencesPath = getTestPreferencesPath();
 	const preferences: UserPreferences = {};
 	writeFileSync(preferencesPath, JSON.stringify(preferences, null, 2), 'utf-8');
 
 	try {
-		const result = getNanocoderShape();
+		const result = getDerekShape();
 		t.is(result, undefined);
 	} finally {
 		if (existsSync(preferencesPath)) {
@@ -712,13 +712,13 @@ test.serial('getNanocoderShape returns undefined when not set', t => {
 	}
 });
 
-test.serial('getNanocoderShape returns undefined when file does not exist', t => {
+test.serial('getDerekShape returns undefined when file does not exist', t => {
 	const preferencesPath = getTestPreferencesPath();
 	if (existsSync(preferencesPath)) {
 		rmSync(preferencesPath, {force: true});
 	}
 
-	const result = getNanocoderShape();
+	const result = getDerekShape();
 	t.is(result, undefined);
 });
 
@@ -729,8 +729,8 @@ test.serial('full workflow: update and retrieve nanocoder shape', t => {
 	}
 
 	try {
-		updateNanocoderShape('grid');
-		const retrieved = getNanocoderShape();
+		updateDerekShape('grid');
+		const retrieved = getDerekShape();
 		t.is(retrieved, 'grid');
 	} finally {
 		if (existsSync(preferencesPath)) {

@@ -59,10 +59,10 @@ function getConfigOptions(): ConfigOption[] {
 	});
 
 	// Preferences
-	const loadedPreferences = confDirMap['nanocoder-preferences.json'];
+	const loadedPreferences = confDirMap['derek-preferences.json'];
 	if (loadedPreferences) {
 		options.push({
-			label: 'nanocoder-preferences.json',
+			label: 'derek-preferences.json',
 			path: loadedPreferences,
 			description: 'User preferences (theme, shapes, last model)',
 		});

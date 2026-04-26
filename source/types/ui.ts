@@ -65,7 +65,7 @@ export type ThemePreset =
 	| 'kanagawa'
 	| 'aurora-borealis';
 
-export type NanocoderShape =
+export type DerekShape =
 	| 'block'
 	| 'slick'
 	| 'tiny'

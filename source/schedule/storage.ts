@@ -8,7 +8,7 @@ import type {
 	SchedulesData,
 } from './types';
 
-const SCHEDULES_DIR = '.nanocoder';
+const SCHEDULES_DIR = '.derek';
 const SCHEDULES_FILE = 'schedules.json';
 const SCHEDULE_RUNS_FILE = 'schedule-runs.json';
 const MAX_RUNS = 100;

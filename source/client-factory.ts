@@ -180,6 +180,8 @@ function loadProviderConfigs(): AIProviderConfig[] {
 		disableToolModels: provider.disableToolModels,
 		// SDK provider package to use
 		sdkProvider: provider.sdkProvider,
+		providerOptions: provider.providerOptions,
+		fallback: provider.fallback,
 		config: {
 			baseURL: provider.baseUrl,
 			apiKey: provider.apiKey || 'dummy-key',

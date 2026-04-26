@@ -9,9 +9,9 @@ import type {EnhancedLoggerConfig, LoggerConfig, LogLevel} from './types.js';
 /**
  * Get the default log directory based on platform
  * Follows OS conventions:
- * - macOS: ~/Library/Logs/nanocoder
- * - Linux: ~/.local/state/nanocoder/logs (XDG_STATE_HOME)
- * - Windows: %LOCALAPPDATA%/nanocoder/logs
+ * - macOS: ~/Library/Logs/derek
+ * - Linux: ~/.local/state/derek/logs (XDG_STATE_HOME)
+ * - Windows: %LOCALAPPDATA%/derek/logs
  */
 export function getDefaultLogDirectory(): string {
 	if (process.env.NANOCODER_LOG_DIR) {
@@ -22,15 +22,15 @@ export function getDefaultLogDirectory(): string {
 		case 'win32':
 			return join(
 				process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'),
-				'nanocoder',
+				'derek',
 				'logs',
 			);
 		case 'darwin':
-			return join(homedir(), 'Library', 'Logs', 'nanocoder');
+			return join(homedir(), 'Library', 'Logs', 'derek');
 		default: // linux
 			return join(
 				process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'),
-				'nanocoder',
+				'derek',
 				'logs',
 			);
 	}
@@ -145,7 +145,7 @@ function createTestConfig(): EnhancedLoggerConfig {
  * Get configuration based on current environment (internal).
  *
  * For CLI tools, we default to production (silent) behavior when NODE_ENV is not set.
- * This gives users a clean experience. Developers working on nanocoder itself should
+ * This gives users a clean experience. Developers working on derek itself should
  * explicitly set NODE_ENV=development to see debug logs.
  */
 function getEnvironmentConfig(): EnhancedLoggerConfig {

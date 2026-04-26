@@ -2,9 +2,9 @@ import test from 'ava';
 import {existsSync, mkdirSync, writeFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {clearAppConfig} from '@/config/index';
-import {isNanocoderToolAlwaysAllowed} from '@/config/nanocoder-tools-config';
+import {isNanocoderToolAlwaysAllowed} from '@/config/derek-tools-config';
 
-const testConfigDir = join(process.cwd(), '.test-config-nanocoder-tools');
+const testConfigDir = join(process.cwd(), '.test-config-derek-tools');
 const testConfigPath = join(testConfigDir, 'agents.config.json');
 
 function setupConfig(config: Record<string, unknown>) {
@@ -30,11 +30,11 @@ test.afterEach(() => {
 });
 
 test.serial(
-	'isNanocoderToolAlwaysAllowed returns true for tool in nanocoderTools.alwaysAllow',
+	'isNanocoderToolAlwaysAllowed returns true for tool in derekTools.alwaysAllow',
 	t => {
 		setupConfig({
 			nanocoder: {
-				nanocoderTools: {
+				derekTools: {
 					alwaysAllow: ['execute_bash', 'read_file'],
 				},
 			},
@@ -70,7 +70,7 @@ test.serial(
 		setupConfig({
 			nanocoder: {
 				alwaysAllow: ['execute_bash'],
-				nanocoderTools: {
+				derekTools: {
 					alwaysAllow: ['read_file'],
 				},
 			},
@@ -99,7 +99,7 @@ test.serial(
 	t => {
 		setupConfig({
 			nanocoder: {
-				nanocoderTools: {
+				derekTools: {
 					alwaysAllow: 'execute_bash',
 				},
 			},

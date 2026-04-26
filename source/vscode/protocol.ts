@@ -1,5 +1,5 @@
 /**
- * Protocol types for communication between VS Code extension and Nanocoder CLI
+ * Protocol types for communication between VS Code extension and Derek CLI
  * This file should be kept in sync with plugins/vscode/src/protocol.ts
  */
 
@@ -26,7 +26,7 @@ export type ClientMessage =
 	| ContextMessage
 	| DiagnosticsResponseMessage;
 
-// File change notification (when nanocoder wants to modify a file)
+// File change notification (when derek wants to modify a file)
 export interface FileChangeMessage {
 	type: 'file_change';
 	id: string;

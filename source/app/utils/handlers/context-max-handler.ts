@@ -103,14 +103,14 @@ export async function handleContextMaxCommand(
 		return true;
 	}
 
-	const envLimit = process.env.NANOCODER_CONTEXT_LIMIT;
+	const envLimit = process.env.DEREK_CONTEXT_LIMIT;
 	if (envLimit) {
 		const parsed = Number.parseInt(envLimit, 10);
 		if (!Number.isNaN(parsed) && parsed > 0) {
 			onAddToChatQueue(
 				React.createElement(InfoMessage, {
 					key: `context-max-info-${getNextComponentKey()}`,
-					message: `Context limit: ${parsed.toLocaleString()} tokens (NANOCODER_CONTEXT_LIMIT env)`,
+					message: `Context limit: ${parsed.toLocaleString()} tokens (DEREK_CONTEXT_LIMIT env)`,
 					hideBox: true,
 				}),
 			);

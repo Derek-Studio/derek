@@ -3,13 +3,13 @@ import {join} from 'path';
 
 export function getAppDataPath(): string {
 	// Allow explicit override via environment variable
-	if (process.env.NANOCODER_DATA_DIR) {
-		return process.env.NANOCODER_DATA_DIR;
+	if (process.env.DEREK_DATA_DIR) {
+		return process.env.DEREK_DATA_DIR;
 	}
 
 	// Check XDG_DATA_HOME first (works cross-platform for testing)
 	if (process.env.XDG_DATA_HOME) {
-		return join(process.env.XDG_DATA_HOME, 'nanocoder');
+		return join(process.env.XDG_DATA_HOME, 'derek');
 	}
 
 	// Platform-specific app data directories
@@ -28,13 +28,13 @@ export function getAppDataPath(): string {
 			baseAppDataPath = join(homedir(), '.local', 'share');
 		}
 	}
-	return join(baseAppDataPath, 'nanocoder');
+	return join(baseAppDataPath, 'derek');
 }
 
 export function getConfigPath(): string {
 	// Allow explicit override via environment variable
-	if (process.env.NANOCODER_CONFIG_DIR) {
-		return process.env.NANOCODER_CONFIG_DIR;
+	if (process.env.DEREK_CONFIG_DIR) {
+		return process.env.DEREK_CONFIG_DIR;
 	}
 
 	// Platform-specific defaults
@@ -51,5 +51,5 @@ export function getConfigPath(): string {
 			baseConfigPath =
 				process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config');
 	}
-	return join(baseConfigPath, 'nanocoder');
+	return join(baseConfigPath, 'derek');
 }

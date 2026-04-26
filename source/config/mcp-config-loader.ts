@@ -94,7 +94,7 @@ export function loadProjectMCPConfig(): MCPServerWithSource[] {
 }
 
 /**
- * Load global MCP configuration from ~/.config/nanocoder/.mcp.json
+ * Load global MCP configuration from ~/.config/derek/.mcp.json
  */
 export function loadGlobalMCPConfig(): MCPServerWithSource[] {
 	const configDir = getConfigPath();
@@ -265,11 +265,9 @@ function loadProjectProviderConfigs(): ProviderConfig[] {
 			const rawData = readFileSync(configPath, 'utf-8');
 			const config = JSON.parse(rawData);
 
-			if (config.nanocoder && Array.isArray(config.nanocoder.providers)) {
+			if (config.derek && Array.isArray(config.derek.providers)) {
 				// Apply environment variable substitution
-				const processedProviders = substituteEnvVars(
-					config.nanocoder.providers,
-				);
+				const processedProviders = substituteEnvVars(config.derek.providers);
 				return processedProviders;
 			} else if (Array.isArray(config.providers)) {
 				// Apply environment variable substitution
@@ -309,9 +307,9 @@ function loadProviderConfigFromFile(filePath: string): ProviderConfig[] {
 		const rawData = readFileSync(filePath, 'utf-8');
 		const config = JSON.parse(rawData);
 
-		if (config.nanocoder && Array.isArray(config.nanocoder.providers)) {
+		if (config.derek && Array.isArray(config.derek.providers)) {
 			// Apply environment variable substitution
-			const processedProviders = substituteEnvVars(config.nanocoder.providers);
+			const processedProviders = substituteEnvVars(config.derek.providers);
 			return processedProviders;
 		} else if (Array.isArray(config.providers)) {
 			// Apply environment variable substitution
@@ -355,8 +353,8 @@ function loadEnvProviderConfigs(): ProviderConfig[] {
 		// Accept direct array format or standard agents.config.json wrapper format
 		if (Array.isArray(config)) {
 			return substituteEnvVars(config);
-		} else if (config.nanocoder && Array.isArray(config.nanocoder.providers)) {
-			return substituteEnvVars(config.nanocoder.providers);
+		} else if (config.derek && Array.isArray(config.derek.providers)) {
+			return substituteEnvVars(config.derek.providers);
 		} else if (Array.isArray(config.providers)) {
 			return substituteEnvVars(config.providers);
 		}

@@ -50,7 +50,7 @@ export function createProductionTransport(
 		target: 'pino-roll',
 		level: 'info',
 		options: {
-			file: join(logDir, 'nanocoder-%Y-%m-%d.log'), // nosemgrep
+			file: join(logDir, 'derek-%Y-%m-%d.log'), // nosemgrep
 			frequency: 'daily',
 			size: '100m',
 			dateFormat: 'yyyy-MM-dd',
@@ -151,7 +151,7 @@ export function createErrorTransport(
 		target: 'pino-roll',
 		level: 'error',
 		options: {
-			file: join(logDir, 'nanocoder-error-%Y-%m-%d.log'), // nosemgrep
+			file: join(logDir, 'derek-error-%Y-%m-%d.log'), // nosemgrep
 			frequency: 'daily',
 			size: '50m', // Smaller files for errors
 			dateFormat: 'yyyy-MM-dd',
@@ -179,7 +179,7 @@ export function createAuditTransport(
 		target: 'pino-roll',
 		level: 'info',
 		options: {
-			file: join(logDir, 'nanocoder-audit-%Y-%m-%d.log'), // nosemgrep
+			file: join(logDir, 'derek-audit-%Y-%m-%d.log'), // nosemgrep
 			frequency: 'daily',
 			size: '200m',
 			dateFormat: 'yyyy-MM-dd',

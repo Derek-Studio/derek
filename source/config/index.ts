@@ -23,17 +23,26 @@ import type {
 import {logError} from '@/utils/message-queue';
 import {DEFAULT_SINGLE_LINE_PASTE_THRESHOLD} from '@/utils/paste-utils';
 
-// Load .env file from working directory (shell environment takes precedence)
-// Suppress dotenv console output by temporarily redirecting stdout
-const envPath = join(process.cwd(), '.env');
-if (existsSync(envPath)) {
+// Load .env in two passes so credentials work regardless of working directory.
+// Precedence (highest → lowest): shell env > cwd .env > global config .env
+function loadEnvFile(path: string, override = false): void {
 	const originalWrite = process.stdout.write.bind(process.stdout);
 	process.stdout.write = () => true;
 	try {
-		loadEnv({path: envPath});
+		loadEnv({path, override});
 	} finally {
 		process.stdout.write = originalWrite;
 	}
+}
+// Pass 1 — global fallback: ~/.config/derek/.env (does NOT override shell env)
+const globalEnvPath = join(getConfigPath(), '.env');
+if (existsSync(globalEnvPath)) {
+	loadEnvFile(globalEnvPath);
+}
+// Pass 2 — project-level: <cwd>/.env (overrides global, but NOT shell env)
+const cwdEnvPath = join(process.cwd(), '.env');
+if (existsSync(cwdEnvPath)) {
+	loadEnvFile(cwdEnvPath, true);
 }
 
 // Hold a map of what config files are where
@@ -44,9 +53,9 @@ export function getClosestConfigFile(fileName: string): string {
 	try {
 		const configDir = getConfigPath();
 
-		// If NANOCODER_CONFIG_DIR is explicitly set, skip cwd and home checks
+		// If DEREK_CONFIG_DIR is explicitly set, skip cwd and home checks
 		// and use only the config directory (important for tests and explicit overrides)
-		const isExplicitConfigDir = Boolean(process.env.NANOCODER_CONFIG_DIR);
+		const isExplicitConfigDir = Boolean(process.env.DEREK_CONFIG_DIR);
 
 		if (!isExplicitConfigDir) {
 			// First, lets check for a working directory config
@@ -114,7 +123,7 @@ function tryLoadAutoCompactFromPath(
 	try {
 		const rawData = readFileSync(configPath, 'utf-8');
 		const config = JSON.parse(rawData);
-		const autoCompact = config.nanocoder?.autoCompact;
+		const autoCompact = config.derek?.autoCompact;
 		if (autoCompact && typeof autoCompact === 'object') {
 			return {
 				enabled:
@@ -194,7 +203,7 @@ function tryLoadSessionsFromPath(
 	try {
 		const rawData = readFileSync(configPath, 'utf-8');
 		const config = JSON.parse(rawData);
-		const sessions = config.nanocoder?.sessions;
+		const sessions = config.derek?.sessions;
 		if (sessions && typeof sessions === 'object') {
 			const normalizeSessionNumber = (
 				value: unknown,
@@ -256,7 +265,7 @@ function loadSessionConfig(): AppConfig['sessions'] {
 	};
 
 	// Try to load from project-level config first
-	const projectConfigPath = join(process.cwd(), 'nanocoder-preferences.json');
+	const projectConfigPath = join(process.cwd(), 'derek-preferences.json');
 	const projectConfig = tryLoadSessionsFromPath(projectConfigPath, defaults);
 	if (projectConfig) {
 		return projectConfig;
@@ -264,7 +273,7 @@ function loadSessionConfig(): AppConfig['sessions'] {
 
 	// Try global config
 	const configDir = getConfigPath();
-	const globalConfigPath = join(configDir, 'nanocoder-preferences.json');
+	const globalConfigPath = join(configDir, 'derek-preferences.json');
 	const globalConfig = tryLoadSessionsFromPath(globalConfigPath, defaults);
 	if (globalConfig) {
 		return globalConfig;
@@ -286,7 +295,7 @@ function tryLoadPasteFromPath(
 	try {
 		const rawData = readFileSync(configPath, 'utf-8');
 		const config = JSON.parse(rawData);
-		const paste = config.nanocoder?.paste;
+		const paste = config.derek?.paste;
 		if (paste && typeof paste === 'object') {
 			return {
 				singleLineThreshold:
@@ -313,7 +322,7 @@ function loadPasteConfig(): PasteConfig {
 	};
 
 	// Try to load from project-level config first
-	const projectConfigPath = join(process.cwd(), 'nanocoder-preferences.json');
+	const projectConfigPath = join(process.cwd(), 'derek-preferences.json');
 	const projectConfig = tryLoadPasteFromPath(projectConfigPath, defaults);
 	if (projectConfig) {
 		return projectConfig;
@@ -321,7 +330,7 @@ function loadPasteConfig(): PasteConfig {
 
 	// Try global config
 	const configDir = getConfigPath();
-	const globalConfigPath = join(configDir, 'nanocoder-preferences.json');
+	const globalConfigPath = join(configDir, 'derek-preferences.json');
 	const globalConfig = tryLoadPasteFromPath(globalConfigPath, defaults);
 	if (globalConfig) {
 		return globalConfig;
@@ -330,10 +339,10 @@ function loadPasteConfig(): PasteConfig {
 	return defaults;
 }
 
-function loadNanocoderToolsConfig(): AppConfig['nanocoderTools'] {
+function loadDerekToolsConfig(): AppConfig['derekTools'] {
 	// Try project-level config first
 	const projectConfigPath = join(process.cwd(), 'agents.config.json');
-	const projectResult = tryLoadNanocoderToolsFromPath(projectConfigPath);
+	const projectResult = tryLoadDerekToolsFromPath(projectConfigPath);
 	if (projectResult) {
 		return projectResult;
 	}
@@ -341,12 +350,12 @@ function loadNanocoderToolsConfig(): AppConfig['nanocoderTools'] {
 	// Try global config
 	const configDir = getConfigPath();
 	const globalConfigPath = join(configDir, 'agents.config.json');
-	return tryLoadNanocoderToolsFromPath(globalConfigPath) ?? undefined;
+	return tryLoadDerekToolsFromPath(globalConfigPath) ?? undefined;
 }
 
-function tryLoadNanocoderToolsFromPath(
+function tryLoadDerekToolsFromPath(
 	configPath: string,
-): AppConfig['nanocoderTools'] | null {
+): AppConfig['derekTools'] | null {
 	if (!existsSync(configPath)) {
 		return null;
 	}
@@ -354,13 +363,13 @@ function tryLoadNanocoderToolsFromPath(
 	try {
 		const rawData = readFileSync(configPath, 'utf-8');
 		const config = JSON.parse(rawData);
-		const nanocoderTools = config.nanocoder?.nanocoderTools;
-		if (nanocoderTools && typeof nanocoderTools === 'object') {
-			return substituteEnvVars(nanocoderTools);
+		const derekTools = config.derek?.derekTools;
+		if (derekTools && typeof derekTools === 'object') {
+			return substituteEnvVars(derekTools);
 		}
 	} catch (error) {
 		logError(
-			`Failed to load nanocoderTools config from ${configPath}: ${String(error)}`,
+			`Failed to load derekTools config from ${configPath}: ${String(error)}`,
 		);
 	}
 
@@ -389,7 +398,7 @@ function tryLoadAlwaysAllowFromPath(configPath: string): string[] | null {
 	try {
 		const rawData = readFileSync(configPath, 'utf-8');
 		const config = JSON.parse(rawData);
-		const alwaysAllow = config.nanocoder?.alwaysAllow;
+		const alwaysAllow = config.derek?.alwaysAllow;
 		if (Array.isArray(alwaysAllow)) {
 			return alwaysAllow.filter(
 				(item: unknown): item is string => typeof item === 'string',
@@ -427,8 +436,8 @@ function loadAppConfig(): AppConfig {
 	// Load paste configuration
 	const paste = loadPasteConfig();
 
-	// Load nanocoder tools configuration
-	const nanocoderTools = loadNanocoderToolsConfig();
+	// Load derek tools configuration
+	const derekTools = loadDerekToolsConfig();
 
 	// Load top-level alwaysAllow (for non-interactive mode and as fallback)
 	const alwaysAllow = loadAlwaysAllowConfig();
@@ -442,7 +451,7 @@ function loadAppConfig(): AppConfig {
 		autoCompact,
 		sessions,
 		paste,
-		nanocoderTools,
+		derekTools,
 		alwaysAllow,
 		notifications,
 	};

@@ -134,14 +134,14 @@ export const scheduleCommand: Command = {
 			// Check schedule file exists
 			const commandPath = join(
 				process.cwd(),
-				'.nanocoder',
+				'.derek',
 				'schedules',
 				commandFile,
 			);
 			if (!existsSync(commandPath)) {
 				return React.createElement(ScheduleMessage, {
 					key: `schedule-error-${Date.now()}`,
-					message: `Schedule file not found: .nanocoder/schedules/${commandFile}\nCreate one with: /schedule create ${commandFile.replace(/\.md$/, '')}`,
+					message: `Schedule file not found: .derek/schedules/${commandFile}\nCreate one with: /schedule create ${commandFile.replace(/\.md$/, '')}`,
 					isError: true,
 				});
 			}

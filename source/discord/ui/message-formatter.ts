@@ -1,0 +1,122 @@
+import type {ToolCall} from '@/types/core';
+
+/**
+ * Format a tool call as a Discord embed-style message.
+ */
+export function formatToolCall(toolCall: ToolCall): string {
+	const name = toolCall.function.name;
+	const args = toolCall.function.arguments;
+
+	let argsPreview = '';
+	if (typeof args === 'object' && args !== null) {
+		const entries = Object.entries(args);
+		if (entries.length > 0) {
+			const lines = entries.map(([key, value]) => {
+				const strVal =
+					typeof value === 'string'
+						? value.length > 100
+							? value.slice(0, 100) + '…'
+							: value
+						: JSON.stringify(value);
+				return `  ${key}: ${strVal}`;
+			});
+			argsPreview = '\n' + lines.join('\n');
+		}
+	}
+
+	return `🔧 **${name}**${argsPreview}`;
+}
+
+/**
+ * Format a tool result for display in a thread.
+ */
+export function formatToolResult(
+	toolName: string,
+	result: string,
+	isError: boolean,
+): string {
+	const icon = isError ? '❌' : '✅';
+	const truncated =
+		result.length > 1500 ? result.slice(0, 1500) + '\n…(truncated)' : result;
+
+	return `${icon} **${toolName}**\n\`\`\`\n${truncated}\n\`\`\``;
+}
+
+/**
+ * Format a progress update.
+ */
+export function formatProgress(
+	steps: Array<{label: string; status: string; detail?: string}>,
+	title: string,
+): string {
+	const icons: Record<string, string> = {
+		pending: '⬜',
+		running: '🔄',
+		complete: '✅',
+		error: '❌',
+	};
+
+	const lines = steps.map(s => {
+		const icon = icons[s.status] || '⬜';
+		const detail = s.detail ? ` — ${s.detail}` : '';
+		return `${icon} ${s.label}${detail}`;
+	});
+
+	return `**${title}**\n━━━━━━━━━━━━━━━━━━━━\n${lines.join('\n')}`;
+}
+
+/**
+ * Format the "thinking" indicator message.
+ */
+export function formatThinking(): string {
+	return '💭 Thinking...';
+}
+
+/**
+ * Format tool approval request for Discord buttons.
+ */
+export function formatToolApproval(toolCall: ToolCall): string {
+	const name = toolCall.function.name;
+	const args = toolCall.function.arguments;
+
+	let detail = '';
+	if (typeof args === 'object' && args !== null) {
+		// Show the most relevant arg for common tools
+		if ('command' in args) {
+			detail = `\n\`\`\`\n${String(args.command).slice(0, 500)}\n\`\`\``;
+		} else if ('path' in args) {
+			detail = `\nPath: \`${args.path}\``;
+		} else {
+			const preview = JSON.stringify(args, null, 2);
+			if (preview.length < 500) {
+				detail = `\n\`\`\`json\n${preview}\n\`\`\``;
+			}
+		}
+	}
+
+	return `🔧 **Tool: ${name}**${detail}`;
+}
+
+/**
+ * Format session status information.
+ */
+export function formatSessionStatus(info: {
+	model?: string;
+	provider?: string;
+	mode: string;
+	messageCount: number;
+	workingDirectory: string;
+	sessionId: string;
+}): string {
+	const lines = [
+		`**Session Status**`,
+		`━━━━━━━━━━━━━━━━━━━━`,
+		`📁 Working directory: \`${info.workingDirectory}\``,
+		`🤖 Model: ${info.model || 'default'}`,
+		`🔌 Provider: ${info.provider || 'default'}`,
+		`⚡ Mode: ${info.mode}`,
+		`💬 Messages: ${info.messageCount}`,
+		`🆔 Session: \`${info.sessionId.slice(0, 8)}…\``,
+	];
+	return lines.join('\n');
+}

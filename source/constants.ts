@@ -1,5 +1,5 @@
 /**
- * Centralized constants for the nanocoder codebase.
+ * Centralized constants for the derek codebase.
  * Naming convention: CATEGORY_DESCRIPTOR_UNIT (e.g., TIMEOUT_PROVIDER_MS)
  * MAX/MIN/DEFAULT always as prefix: MAX_CATEGORY_DESCRIPTOR
  */

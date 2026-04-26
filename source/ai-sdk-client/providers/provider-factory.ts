@@ -245,8 +245,8 @@ export async function createProvider(
 	// Add OpenRouter-specific headers for app attribution
 	const headers: Record<string, string> = config.headers ?? {};
 	if (providerConfig.name.toLowerCase() === 'openrouter') {
-		headers['HTTP-Referer'] = 'https://github.com/Nano-Collective/nanocoder';
-		headers['X-Title'] = 'Nanocoder';
+		headers['HTTP-Referer'] = 'https://github.com/Nano-Collective/derek';
+		headers['X-Title'] = 'Derek';
 	}
 
 	const {createOpenAICompatible} = await import('@ai-sdk/openai-compatible');

@@ -1,5 +1,5 @@
 import type {TitleShape} from '@/components/ui/styled-title';
-import type {NanocoderShape, ThemePreset} from '@/types/ui';
+import type {DerekShape, ThemePreset} from '@/types/ui';
 
 // Supported AI SDK provider packages
 export type SdkProvider =
@@ -26,6 +26,14 @@ export interface AIProviderConfig {
 	disableToolModels?: string[]; // List of model names to disable tools for
 	// SDK provider package to use (default: 'openai-compatible')
 	sdkProvider?: SdkProvider;
+	// Provider-specific options passed directly to streamText/generateText
+	providerOptions?: Record<string, Record<string, unknown>>;
+	// Ordered chain of fallback models to try when the primary model fails
+	fallback?: Array<{
+		model: string;
+		afterRetries?: number; // retries on the previous model before switching (default: 1)
+		maxRetries?: number; // retries on this fallback model (default: 3)
+	}>;
 	// Model mode defaults for this provider
 	tune?: Partial<TuneConfig>;
 	config: {
@@ -57,6 +65,14 @@ export interface ProviderConfig {
 	headers?: Record<string, string>;
 	// SDK provider package to use (default: 'openai-compatible')
 	sdkProvider?: SdkProvider;
+	// Provider-specific options passed directly to streamText/generateText
+	providerOptions?: Record<string, Record<string, unknown>>;
+	// Ordered chain of fallback models
+	fallback?: Array<{
+		model: string;
+		afterRetries?: number;
+		maxRetries?: number;
+	}>;
 	[key: string]: unknown; // Allow additional provider-specific config
 }
 
@@ -129,7 +145,7 @@ export interface AppConfig {
 	alwaysAllow?: string[];
 
 	// Nanocoder-specific tool configurations
-	nanocoderTools?: {
+	derekTools?: {
 		alwaysAllow?: string[];
 		webSearch?: {
 			apiKey?: string;
@@ -215,7 +231,7 @@ export interface UserPreferences {
 	selectedTheme?: ThemePreset;
 	trustedDirectories?: string[];
 	titleShape?: TitleShape;
-	nanocoderShape?: NanocoderShape;
+	derekShape?: DerekShape;
 	tune?: TuneConfig;
 	notifications?: NotificationsConfig;
 	paste?: PasteConfig;

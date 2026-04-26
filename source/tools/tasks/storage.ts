@@ -3,7 +3,7 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {Task} from './types';
 
-const TASKS_DIR = '.nanocoder';
+const TASKS_DIR = '.derek';
 const TASKS_FILE = 'tasks.json';
 
 export function getTasksPath(): string {

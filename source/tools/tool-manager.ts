@@ -1,4 +1,4 @@
-import {getBraveSearchApiKey} from '@/config/nanocoder-tools-config';
+import {getBraveSearchApiKey} from '@/config/derek-tools-config';
 // Type-only import — the `MCPClient` runtime value is loaded dynamically
 // inside `initializeMCP()` so sessions without MCP servers never pay the
 // cost of the @modelcontextprotocol/sdk import graph.

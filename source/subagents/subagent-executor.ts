@@ -20,6 +20,7 @@ import type {
 	Message,
 	ToolCall,
 } from '@/types/core';
+import {getLogger} from '@/utils/logging';
 import {signalToolApproval} from '@/utils/tool-approval-queue';
 import {parseToolArguments} from '@/utils/tool-args-parser';
 import {getSubagentLoader} from './subagent-loader.js';
@@ -36,6 +37,56 @@ const MAX_SUBAGENT_DEPTH = 2;
 /** Maximum number of concurrent subagents */
 export const MAX_CONCURRENT_AGENTS = 5;
 
+/** Default retry configuration */
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_BASE_DELAY_MS = 1000;
+const DEFAULT_EXPONENTIAL_BACKOFF = true;
+
+/**
+ * Sleep for a specified number of milliseconds.
+ */
+function sleep(ms: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Calculate exponential backoff delay.
+ */
+function calculateBackoffDelay(
+	attempt: number,
+	baseDelayMs: number,
+	useExponential: boolean,
+): number {
+	if (!useExponential) {
+		return baseDelayMs;
+	}
+	// Exponential backoff with jitter: base * (2^attempt) + random(0, 500ms)
+	const exponentialDelay = baseDelayMs * Math.pow(2, attempt);
+	const jitter = Math.random() * 500;
+	return exponentialDelay + jitter;
+}
+
+/**
+ * Check if an error is retryable.
+ */
+function isRetryableError(error: unknown): boolean {
+	if (!(error instanceof Error)) return true;
+
+	const message = error.message.toLowerCase();
+	// Don't retry user cancellations or configuration errors
+	if (
+		message.includes('aborted') ||
+		message.includes('cancelled') ||
+		message.includes('not found') ||
+		message.includes('recursion depth')
+	) {
+		return false;
+	}
+
+	// Retry network errors, timeouts, rate limits, etc.
+	return true;
+}
+
 /**
  * SubagentExecutor manages the execution of delegated tasks to subagents.
  * Each subagent runs in an isolated context with filtered tools.
@@ -45,17 +96,20 @@ export class SubagentExecutor {
 	private parentClient: LLMClient;
 	private projectRoot: string;
 	private parentMode: DevelopmentMode;
+	private sleepFn: (ms: number) => Promise<void>;
 
 	constructor(
 		toolManager: ToolManager,
 		parentClient: LLMClient,
 		projectRoot: string = process.cwd(),
 		parentMode: DevelopmentMode = 'normal',
+		sleepFn: (ms: number) => Promise<void> = sleep,
 	) {
 		this.toolManager = toolManager;
 		this.parentClient = parentClient;
 		this.projectRoot = projectRoot;
 		this.parentMode = parentMode;
+		this.sleepFn = sleepFn;
 	}
 
 	/**
@@ -66,7 +120,7 @@ export class SubagentExecutor {
 	}
 
 	/**
-	 * Execute a subagent task.
+	 * Execute a subagent task with retry logic and exponential backoff.
 	 *
 	 * @param task - The task to execute
 	 * @param signal - Optional abort signal for cancellation
@@ -82,6 +136,7 @@ export class SubagentExecutor {
 		agentId?: string,
 	): Promise<SubagentResult> {
 		const startTime = Date.now();
+		const logger = getLogger();
 
 		if (depth >= MAX_SUBAGENT_DEPTH) {
 			return {
@@ -93,70 +148,228 @@ export class SubagentExecutor {
 			};
 		}
 
-		try {
-			const loader = getSubagentLoader(this.projectRoot);
-			const config = await loader.getSubagent(task.subagent_type);
+		const loader = getSubagentLoader(this.projectRoot);
+		const config = await loader.getSubagent(task.subagent_type);
 
-			if (!config) {
-				return {
-					subagentName: task.subagent_type,
-					output: '',
-					success: false,
-					error: `Subagent '${task.subagent_type}' not found`,
-					executionTimeMs: Date.now() - startTime,
-				};
-			}
-
-			const context = this.createSubagentContext(config, task);
-			const filteredTools = this.filterTools(config);
-
-			const messages: Message[] = [
-				{role: 'system', content: context.systemMessage},
-				...context.initialMessages,
-			];
-
-			// Get the client for this subagent — either a new one for a
-			// different provider, or the parent client with model switching.
-			// When agentId is set (concurrent mode), always create a new client
-			// for non-inherit models to avoid mutating the shared parent.
-			const {client, restoreParent} = await this.prepareClient(
-				config,
-				!!agentId,
-			);
-
-			try {
-				const output = await this.runSubagentConversation(
-					client,
-					messages,
-					filteredTools,
-					config,
-					signal,
-					agentId,
-				);
-
-				// Read final token count from the correct progress source
-				const finalTokenCount = agentId
-					? getSubagentProgress(agentId).tokenCount
-					: subagentProgress.tokenCount;
-
-				return {
-					subagentName: config.name,
-					output,
-					success: true,
-					tokensUsed: finalTokenCount,
-					executionTimeMs: Date.now() - startTime,
-				};
-			} finally {
-				restoreParent();
-			}
-		} catch (error) {
+		if (!config) {
 			return {
 				subagentName: task.subagent_type,
 				output: '',
 				success: false,
-				error: error instanceof Error ? error.message : String(error),
+				error: `Subagent '${task.subagent_type}' not found`,
 				executionTimeMs: Date.now() - startTime,
 			};
+		}
+
+		// Get retry configuration from config with defaults
+		const exponentialBackoff =
+			config.exponentialBackoff ?? DEFAULT_EXPONENTIAL_BACKOFF;
+		const baseDelayMs = config.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
+
+		// Build retry phases: primary model + ordered fallback chain
+		const fallbackChain = this.parentClient.getFallbackConfig();
+		// First fallback's afterRetries defines how many tries on the primary model
+		const primaryMaxRetries =
+			fallbackChain?.[0]?.afterRetries ??
+			config.maxRetries ??
+			DEFAULT_MAX_RETRIES;
+		const phases: Array<{
+			modelOverride?: string;
+			maxRetries: number;
+			label: string;
+		}> = [
+			{maxRetries: primaryMaxRetries, label: 'primary'},
+			...(fallbackChain ?? []).map((step, i) => ({
+				modelOverride: step.model,
+				maxRetries: step.maxRetries,
+				label: `fallback-${i + 1}(${step.model})`,
+			})),
+		];
+
+		let lastError: unknown = null;
+		let totalAttempts = 0;
+
+		for (const phase of phases) {
+			if (phase.modelOverride) {
+				logger.info('Switching to fallback model', {
+					subagentName: config.name,
+					fallbackModel: phase.modelOverride,
+					agentId,
+				});
+			}
+
+			for (let attempt = 0; attempt <= phase.maxRetries; attempt++) {
+				totalAttempts++;
+				const attemptStartTime = Date.now();
+
+				// Check for cancellation before each attempt
+				if (signal?.aborted) {
+					return {
+						subagentName: config.name,
+						output: '',
+						success: false,
+						error: 'Execution was cancelled',
+						executionTimeMs: Date.now() - startTime,
+					};
+				}
+
+				try {
+					logger.info('Subagent execution attempt', {
+						subagentName: config.name,
+						task: task.description,
+						attempt: totalAttempts,
+						phase: phase.label,
+						model: phase.modelOverride ?? 'primary',
+						agentId,
+					});
+
+					const result = await this.executeSingleAttempt(
+						task,
+						config,
+						signal,
+						agentId,
+						startTime,
+						phase.modelOverride,
+					);
+
+					if (result.success) {
+						if (totalAttempts > 1) {
+							logger.info('Subagent execution succeeded after retry', {
+								subagentName: config.name,
+								totalAttempts,
+								phase: phase.label,
+								executionTimeMs: result.executionTimeMs,
+								agentId,
+							});
+						}
+						return result;
+					}
+
+					// Non-success result (e.g. LLM returned empty) — don't retry
+					return result;
+				} catch (error) {
+					lastError = error;
+					const errorMessage =
+						error instanceof Error ? error.message : String(error);
+
+					logger.warn('Subagent execution attempt failed', {
+						subagentName: config.name,
+						attempt: totalAttempts,
+						phase: phase.label,
+						error: errorMessage,
+						executionTimeMs: Date.now() - attemptStartTime,
+						agentId,
+					});
+
+					if (!isRetryableError(error)) {
+						logger.info('Error is not retryable, failing immediately', {
+							subagentName: config.name,
+							error: errorMessage,
+							agentId,
+						});
+						return {
+							subagentName: config.name,
+							output: '',
+							success: false,
+							error: errorMessage,
+							executionTimeMs: Date.now() - startTime,
+						};
+					}
+
+					if (attempt < phase.maxRetries) {
+						const delay = calculateBackoffDelay(
+							attempt,
+							baseDelayMs,
+							exponentialBackoff,
+						);
+						logger.info('Retrying subagent execution after delay', {
+							subagentName: config.name,
+							attempt: totalAttempts,
+							phase: phase.label,
+							delayMs: Math.round(delay),
+							agentId,
+						});
+						await this.sleepFn(delay);
+					}
+				}
+			}
+		}
+
+		// All phases exhausted
+		const errorMessage =
+			lastError instanceof Error ? lastError.message : String(lastError);
+		logger.error('Subagent execution failed after all retry attempts', {
+			subagentName: config.name,
+			totalAttempts,
+			finalError: errorMessage,
+			totalExecutionTimeMs: Date.now() - startTime,
+			agentId,
+		});
+
+		return {
+			subagentName: config.name,
+			output: '',
+			success: false,
+			error: `Failed after ${totalAttempts} attempts. Last error: ${errorMessage}`,
+			executionTimeMs: Date.now() - startTime,
+		};
+	}
+
+	/**
+	 * Execute a single attempt of the subagent task without retry logic.
+	 */
+	private async executeSingleAttempt(
+		task: SubagentTask,
+		config: SubagentConfigWithSource,
+		signal?: AbortSignal,
+		agentId?: string,
+		startTime?: number,
+		modelOverride?: string,
+	): Promise<SubagentResult> {
+		const actualStartTime = startTime ?? Date.now();
+
+		const context = this.createSubagentContext(config, task);
+		const filteredTools = this.filterTools(config);
+
+		const messages: Message[] = [
+			{role: 'system', content: context.systemMessage},
+			...context.initialMessages,
+		];
+
+		// Apply model override (used during fallback phase) by merging into config
+		const effectiveConfig = modelOverride
+			? {...config, model: modelOverride}
+			: config;
+
+		const {client, restoreParent} = await this.prepareClient(
+			effectiveConfig,
+			!!agentId,
+		);
+
+		try {
+			const output = await this.runSubagentConversation(
+				client,
+				messages,
+				filteredTools,
+				config,
+				signal,
+				agentId,
+			);
+
+			// Read final token count from the correct progress source
+			const finalTokenCount = agentId
+				? getSubagentProgress(agentId).tokenCount
+				: subagentProgress.tokenCount;
+
+			return {
+				subagentName: config.name,
+				output,
+				success: true,
+				tokensUsed: finalTokenCount,
+				executionTimeMs: Date.now() - actualStartTime,
+			};
+		} finally {
+			restoreParent();
 		}
 	}
 

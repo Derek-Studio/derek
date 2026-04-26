@@ -45,6 +45,9 @@ export async function parseSubagentMarkdown(
 		tools: frontmatter.tools,
 		disallowedTools: frontmatter.disallowedTools,
 		systemPrompt,
+		maxRetries: frontmatter.maxRetries,
+		exponentialBackoff: frontmatter.exponentialBackoff,
+		baseDelayMs: frontmatter.baseDelayMs,
 	};
 
 	return {
@@ -100,6 +103,39 @@ export function validateFrontmatter(
 			return {
 				valid: false,
 				error: 'disallowedTools must be an array of strings',
+			};
+		}
+	}
+
+	if (frontmatter.maxRetries !== undefined) {
+		if (
+			!Number.isInteger(frontmatter.maxRetries) ||
+			(frontmatter.maxRetries as number) < 0
+		) {
+			return {
+				valid: false,
+				error: 'maxRetries must be a non-negative integer',
+			};
+		}
+	}
+
+	if (frontmatter.exponentialBackoff !== undefined) {
+		if (typeof frontmatter.exponentialBackoff !== 'boolean') {
+			return {
+				valid: false,
+				error: 'exponentialBackoff must be a boolean',
+			};
+		}
+	}
+
+	if (frontmatter.baseDelayMs !== undefined) {
+		if (
+			!Number.isInteger(frontmatter.baseDelayMs) ||
+			(frontmatter.baseDelayMs as number) <= 0
+		) {
+			return {
+				valid: false,
+				error: 'baseDelayMs must be a positive integer',
 			};
 		}
 	}

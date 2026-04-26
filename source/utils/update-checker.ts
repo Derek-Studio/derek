@@ -8,14 +8,14 @@ import {logError} from '@/utils/message-queue';
 import {detectInstallationMethod} from './installation-detector';
 
 const UPDATE_COMMANDS = {
-	NPM: 'npm update -g @nanocollective/nanocoder',
+	NPM: 'npm update -g @derek-studio/derek',
 	// Check if package exists before upgrading to provide better error messages
 	HOMEBREW:
-		'brew list nanocoder >/dev/null 2>&1 && brew upgrade nanocoder || (echo "Error: nanocoder not found in Homebrew. Please install it first with: brew install nanocoder" && exit 1)',
+		'brew list derek >/dev/null 2>&1 && brew upgrade derek || (echo "Error: derek not found in Homebrew. Please install it first with: brew install derek" && exit 1)',
 } as const;
 
 const UPDATE_MESSAGES = {
-	NIX: 'To update, re-run: nix run github:Nano-Collective/nanocoder (or update your flake).',
+	NIX: 'To update, re-run: nix run github:Nano-Collective/derek (or update your flake).',
 	UNKNOWN:
 		'A new version is available. Please update using your package manager.',
 } as const;
@@ -80,12 +80,12 @@ function getCurrentVersion(): string {
 async function fetchLatestVersion(): Promise<string | null> {
 	try {
 		const response = await fetch(
-			'https://registry.npmjs.org/@nanocollective/nanocoder/latest',
+			'https://registry.npmjs.org/@derek-studio/derek/latest',
 			{
 				method: 'GET',
 				headers: {
 					Accept: 'application/json',
-					'User-Agent': 'nanocoder-update-checker',
+					'User-Agent': 'derek-update-checker',
 				},
 				// Add timeout
 				signal: AbortSignal.timeout(TIMEOUT_UPDATE_CHECK_MS),

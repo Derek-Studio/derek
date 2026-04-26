@@ -165,7 +165,7 @@ export class VSCodeServer {
 			`[VS Code] Could not start server. Ports ${requestedPort}-${requestedPort + maxRetries} are all in use.`,
 		);
 		console.error(
-			'[VS Code] Try closing other nanocoder instances or VS Code windows.',
+			'[VS Code] Try closing other derek instances or VS Code windows.',
 		);
 		return false;
 	}

@@ -2,7 +2,7 @@
  * User-level storage for GitHub Copilot credentials.
  * The stored token is the GitHub OAuth access token from the device flow
  * (used to obtain short-lived Copilot API tokens). Stored under config path
- * (e.g. ~/.config/nanocoder/) so they are not in project config.
+ * (e.g. ~/.config/derek/) so they are not in project config.
  */
 
 import {
@@ -20,7 +20,7 @@ const FILENAME = 'copilot-credentials.json';
 
 /** Shared message when no Copilot credential is found (used by provider-factory and client-factory). */
 export function getCopilotNoCredentialsMessage(providerName: string): string {
-	return `No Copilot credentials for "${providerName}". Type /copilot-login in the chat to log in, or run: nanocoder copilot login (from project: node dist/cli.js copilot login)`;
+	return `No Copilot credentials for "${providerName}". Type /copilot-login in the chat to log in, or run: derek copilot login (from project: node dist/cli.js copilot login)`;
 }
 
 export interface CopilotCredential {

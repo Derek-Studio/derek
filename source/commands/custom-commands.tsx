@@ -67,7 +67,7 @@ function CustomCommands({commands}: CustomCommandsProps) {
 					<Text color={colors.text}>To create custom commands:</Text>
 
 					<Text color={colors.secondary}>
-						1. Create a <Text color={colors.primary}>.nanocoder/commands</Text>{' '}
+						1. Create a <Text color={colors.primary}>.derek/commands</Text>{' '}
 						directory in your project
 					</Text>
 

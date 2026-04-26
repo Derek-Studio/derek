@@ -32,7 +32,7 @@ export class CustomCommandLoader {
 	constructor(projectRoot: string = process.cwd()) {
 		this.projectRoot = projectRoot;
 		// nosemgrep
-		this.projectCommandsDir = join(projectRoot, '.nanocoder', 'commands'); // nosemgrep
+		this.projectCommandsDir = join(projectRoot, '.derek', 'commands'); // nosemgrep
 		this.personalCommandsDir = join(getConfigPath(), 'commands');
 	}
 
@@ -58,24 +58,24 @@ export class CustomCommandLoader {
 	}
 
 	/**
-	 * Check for deprecated .nanocoder/skills directories and warn
+	 * Check for deprecated .derek/skills directories and warn
 	 */
 	private checkDeprecatedSkillsDirs(): void {
 		if (this.deprecationWarned) return;
 
-		const projectSkillsDir = join(this.projectRoot, '.nanocoder', 'skills');
+		const projectSkillsDir = join(this.projectRoot, '.derek', 'skills');
 		const personalSkillsDir = join(getConfigPath(), 'skills');
 		let warned = false;
 
 		if (existsSync(projectSkillsDir)) {
 			logError(
-				'Skills have been merged into commands. Move your SKILL.md files from .nanocoder/skills/ to .nanocoder/commands/ and rename them.',
+				'Skills have been merged into commands. Move your SKILL.md files from .derek/skills/ to .derek/commands/ and rename them.',
 			);
 			warned = true;
 		}
 		if (existsSync(personalSkillsDir)) {
 			logError(
-				'Skills have been merged into commands. Move your SKILL.md files from ~/.config/nanocoder/skills/ to ~/.config/nanocoder/commands/ and rename them.',
+				'Skills have been merged into commands. Move your SKILL.md files from ~/.config/derek/skills/ to ~/.config/derek/commands/ and rename them.',
 			);
 			warned = true;
 		}

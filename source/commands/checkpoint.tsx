@@ -51,7 +51,7 @@ function CheckpointHelp() {
 
 /checkpoint help - Show this help message
 
-Note: Checkpoints are stored in your nanocoder config directory.`}
+Note: Checkpoints are stored in your derek config directory.`}
 			hideBox={false}
 		/>
 	);

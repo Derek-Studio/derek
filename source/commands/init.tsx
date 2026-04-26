@@ -37,7 +37,7 @@ function InitSuccess({
 		>
 			<Box marginBottom={1}>
 				<Text color={colors.primary} bold>
-					✓ Nanocoder project initialized successfully!
+					✓ Derek project initialized successfully!
 				</Text>
 			</Box>
 
@@ -194,7 +194,7 @@ Make it reusable and well-documented.`;
 export const initCommand: Command = {
 	name: 'init',
 	description:
-		'Initialize nanocoder configuration and analyze project structure. Use --force to regenerate AGENTS.md.',
+		'Initialize derek configuration and analyze project structure. Use --force to regenerate AGENTS.md.',
 	handler: (args: string[], _messages, _metadata) => {
 		const cwd = process.cwd();
 		const created: string[] = [];
@@ -203,18 +203,18 @@ export const initCommand: Command = {
 		try {
 			// Check if already initialized
 			const agentsPath = join(cwd, 'AGENTS.md');
-			const nanocoderDir = join(cwd, '.nanocoder');
+			const derekDir = join(cwd, '.derek');
 
 			// Check for existing initialization
 			const hasAgents = existsSync(agentsPath);
-			const hasNanocoder = existsSync(nanocoderDir);
+			const hasDerek = existsSync(derekDir);
 
-			if (hasAgents && hasNanocoder && !forceRegenerate) {
+			if (hasAgents && hasDerek && !forceRegenerate) {
 				return Promise.resolve(
 					React.createElement(InitError, {
 						key: `init-error-${Date.now()}`,
 						message:
-							'Project already initialized. Found AGENTS.md and .nanocoder/ directory. Use /init --force to regenerate.',
+							'Project already initialized. Found AGENTS.md and .derek/ directory. Use /init --force to regenerate.',
 					}),
 				);
 			}
@@ -247,16 +247,16 @@ export const initCommand: Command = {
 				}
 			}
 
-			// Create .nanocoder directory structure
-			if (!hasNanocoder) {
-				mkdirSync(nanocoderDir, {recursive: true});
-				created.push('.nanocoder/');
+			// Create .derek directory structure
+			if (!hasDerek) {
+				mkdirSync(derekDir, {recursive: true});
+				created.push('.derek/');
 			}
 
-			const commandsDir = join(nanocoderDir, 'commands');
+			const commandsDir = join(derekDir, 'commands');
 			if (!existsSync(commandsDir)) {
 				mkdirSync(commandsDir, {recursive: true});
-				created.push('.nanocoder/commands/');
+				created.push('.derek/commands/');
 			}
 
 			// Create example custom commands based on project analysis
@@ -269,7 +269,7 @@ export const initCommand: Command = {
 				const filePath = join(commandsDir, filename);
 				if (!existsSync(filePath)) {
 					writeFileSync(filePath, content);
-					created.push(`.nanocoder/commands/${filename}`);
+					created.push(`.derek/commands/${filename}`);
 				}
 			}
 

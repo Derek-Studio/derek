@@ -3,8 +3,8 @@
  *
  * Handles loading and discovery of subagent definitions from various sources:
  * - Built-in definitions (explore, plan)
- * - User-level configuration (~/.config/nanocoder/agents/)
- * - Project-level configuration (.nanocoder/agents/)
+ * - User-level configuration (~/.config/derek/agents/)
+ * - Project-level configuration (.derek/agents/)
  */
 
 import * as fs from 'node:fs/promises';
@@ -156,32 +156,32 @@ export class SubagentLoader {
 		const platform = process.platform;
 
 		if (platform === 'darwin') {
-			// macOS: ~/Library/Preferences/nanocoder/agents/
+			// macOS: ~/Library/Preferences/derek/agents/
 			return path.join(
 				os.homedir(),
 				'Library',
 				'Preferences',
-				'nanocoder',
+				'derek',
 				'agents',
 			);
 		}
 		if (platform === 'win32') {
-			// Windows: %APPDATA%/nanocoder/agents/
+			// Windows: %APPDATA%/derek/agents/
 			return path.join(
 				process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
-				'nanocoder',
+				'derek',
 				'agents',
 			);
 		}
-		// Linux and others: ~/.config/nanocoder/agents/
-		return path.join(os.homedir(), '.config', 'nanocoder', 'agents');
+		// Linux and others: ~/.config/derek/agents/
+		return path.join(os.homedir(), '.config', 'derek', 'agents');
 	}
 
 	/**
 	 * Get the project-level agents directory path.
 	 */
 	private getProjectAgentsPath(): string {
-		return path.join(this.projectRoot, '.nanocoder', 'agents');
+		return path.join(this.projectRoot, '.derek', 'agents');
 	}
 
 	/**

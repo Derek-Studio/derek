@@ -137,6 +137,16 @@ export class AISDKClient implements LLMClient {
 		return Promise.resolve(this.availableModels);
 	}
 
+	getFallbackConfig(): import('@/types/core').FallbackStep[] | undefined {
+		const fb = this.providerConfig.fallback;
+		if (!fb || fb.length === 0) return undefined;
+		return fb.map(step => ({
+			model: step.model,
+			afterRetries: step.afterRetries ?? 1,
+			maxRetries: step.maxRetries ?? 3,
+		}));
+	}
+
 	/**
 	 * Stream chat with real-time token updates
 	 */

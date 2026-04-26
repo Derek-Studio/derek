@@ -1,7 +1,7 @@
 import {Box, Text} from 'ink';
 import React from 'react';
 
-import {getBraveSearchApiKey} from '@/config/nanocoder-tools-config';
+import {getBraveSearchApiKey} from '@/config/derek-tools-config';
 import {
 	DEFAULT_WEB_SEARCH_RESULTS,
 	MAX_WEB_SEARCH_QUERY_LENGTH,
@@ -37,7 +37,7 @@ export const executeWebSearch = async (
 	const apiKey = apiKeyOverride ?? getBraveSearchApiKey();
 	if (!apiKey) {
 		throw new Error(
-			'Brave Search API key not configured. Add it to agents.config.json under nanocoderTools.webSearch.apiKey',
+			'Brave Search API key not configured. Add it to agents.config.json under derekTools.webSearch.apiKey',
 		);
 	}
 

@@ -3,17 +3,17 @@ import type {TitleShape} from '@/components/ui/styled-title';
 import {getClosestConfigFile} from '@/config/index';
 import type {TuneConfig} from '@/types/config';
 import type {UserPreferences} from '@/types/index';
-import type {NanocoderShape, ThemePreset} from '@/types/ui';
+import type {DerekShape, ThemePreset} from '@/types/ui';
 import {logError} from '@/utils/message-queue';
 
 let PREFERENCES_PATH: string | null = null;
 let CACHED_CONFIG_DIR: string | undefined = undefined;
 
 function getPreferencesPath(): string {
-	// Re-compute path if NANOCODER_CONFIG_DIR has changed (important for tests)
-	const currentConfigDir = process.env.NANOCODER_CONFIG_DIR;
+	// Re-compute path if DEREK_CONFIG_DIR has changed (important for tests)
+	const currentConfigDir = process.env.DEREK_CONFIG_DIR;
 	if (!PREFERENCES_PATH || CACHED_CONFIG_DIR !== currentConfigDir) {
-		PREFERENCES_PATH = getClosestConfigFile('nanocoder-preferences.json');
+		PREFERENCES_PATH = getClosestConfigFile('derek-preferences.json');
 		CACHED_CONFIG_DIR = currentConfigDir;
 	}
 	return PREFERENCES_PATH;
@@ -79,15 +79,15 @@ export function getLastUsedModel(provider: string): string | undefined {
 	return preferences.providerModels?.[provider];
 }
 
-export function updateNanocoderShape(shape: NanocoderShape): void {
+export function updateDerekShape(shape: DerekShape): void {
 	const preferences = loadPreferences();
-	preferences.nanocoderShape = shape;
+	preferences.derekShape = shape;
 	savePreferences(preferences);
 }
 
-export function getNanocoderShape(): NanocoderShape | undefined {
+export function getDerekShape(): DerekShape | undefined {
 	const preferences = loadPreferences();
-	return preferences.nanocoderShape;
+	return preferences.derekShape;
 }
 
 export function saveTune(config: TuneConfig): void {

@@ -66,14 +66,14 @@ async function handleFileCreate(
 	}
 
 	const safeName = fileName.endsWith('.md') ? fileName : `${fileName}.md`;
-	const targetDir = join(process.cwd(), '.nanocoder', dirName);
+	const targetDir = join(process.cwd(), '.derek', dirName);
 	const filePath = join(targetDir, safeName);
 
 	if (existsSync(filePath)) {
 		onAddToChatQueue(
 			React.createElement(ErrorMessage, {
 				key: `${entityName}-create-exists-${getNextComponentKey()}`,
-				message: `${entityName === 'schedule' ? 'Schedule' : 'Command'} file already exists: .nanocoder/${dirName}/${safeName}`,
+				message: `${entityName === 'schedule' ? 'Schedule' : 'Command'} file already exists: .derek/${dirName}/${safeName}`,
 			}),
 		);
 		onCommandComplete?.();
@@ -93,7 +93,7 @@ description: ${safeName.replace(/\.md$/, '')} ${entityName === 'schedule' ? 'sch
 	onAddToChatQueue(
 		React.createElement(SuccessMessage, {
 			key: `${entityName}-created-${getNextComponentKey()}`,
-			message: `Created ${entityName} file: .nanocoder/${dirName}/${safeName}`,
+			message: `Created ${entityName} file: .derek/${dirName}/${safeName}`,
 			hideBox: true,
 		}),
 	);
@@ -121,7 +121,7 @@ export async function handleScheduleCreate(
 		'schedules',
 		'schedule',
 		safeName =>
-			`I just created a new schedule command file at .nanocoder/schedules/${safeName}. Help me write the content for this scheduled task. Ask me what I want this scheduled job to do, then write the markdown prompt into the file using the write_file tool. The file should contain a clear prompt that instructs the AI agent what to do when this schedule runs. Keep the YAML frontmatter at the top with the description field.`,
+			`I just created a new schedule command file at .derek/schedules/${safeName}. Help me write the content for this scheduled task. Ask me what I want this scheduled job to do, then write the markdown prompt into the file using the write_file tool. The file should contain a clear prompt that instructs the AI agent what to do when this schedule runs. Keep the YAML frontmatter at the top with the description field.`,
 		options,
 	);
 }
@@ -160,14 +160,14 @@ export async function handleAgentCreate(
 	}
 
 	const safeName = fileName.endsWith('.md') ? fileName : `${fileName}.md`;
-	const targetDir = join(process.cwd(), '.nanocoder', 'agents');
+	const targetDir = join(process.cwd(), '.derek', 'agents');
 	const filePath = join(targetDir, safeName);
 
 	if (existsSync(filePath)) {
 		onAddToChatQueue(
 			React.createElement(ErrorMessage, {
 				key: `agents-create-exists-${getNextComponentKey()}`,
-				message: `Agent file already exists: .nanocoder/agents/${safeName}`,
+				message: `Agent file already exists: .derek/agents/${safeName}`,
 			}),
 		);
 		onCommandComplete?.();
@@ -191,13 +191,13 @@ TODO - write the system prompt for this agent
 	onAddToChatQueue(
 		React.createElement(SuccessMessage, {
 			key: `agents-created-${getNextComponentKey()}`,
-			message: `Created agent file: .nanocoder/agents/${safeName}`,
+			message: `Created agent file: .derek/agents/${safeName}`,
 			hideBox: true,
 		}),
 	);
 
 	await onHandleChatMessage(
-		`I just created a new subagent definition file at .nanocoder/agents/${safeName}. Help me write the content for this agent. Ask me what I want this agent to specialize in, then write the complete markdown file using the write_file tool.
+		`I just created a new subagent definition file at .derek/agents/${safeName}. Help me write the content for this agent. Ask me what I want this agent to specialize in, then write the complete markdown file using the write_file tool.
 
 Here is the frontmatter format with all available fields:
 
@@ -266,7 +266,7 @@ function buildAgentMarkdown(agent: SubagentConfigWithSource): string {
 
 /**
  * Handles /agents copy <name> — copies an agent (including built-in) to
- * .nanocoder/agents/ so it can be customized.
+ * .derek/agents/ so it can be customized.
  * Returns true if handled.
  */
 export async function handleAgentCopy(
@@ -309,14 +309,14 @@ export async function handleAgentCopy(
 	}
 
 	const safeName = `${agentName}.md`;
-	const targetDir = join(process.cwd(), '.nanocoder', 'agents');
+	const targetDir = join(process.cwd(), '.derek', 'agents');
 	const filePath = join(targetDir, safeName);
 
 	if (existsSync(filePath)) {
 		onAddToChatQueue(
 			React.createElement(ErrorMessage, {
 				key: `agents-copy-exists-${getNextComponentKey()}`,
-				message: `Agent file already exists: .nanocoder/agents/${safeName}\nTo modify it, edit the file directly.`,
+				message: `Agent file already exists: .derek/agents/${safeName}\nTo modify it, edit the file directly.`,
 			}),
 		);
 		onCommandComplete?.();
@@ -331,7 +331,7 @@ export async function handleAgentCopy(
 	onAddToChatQueue(
 		React.createElement(SuccessMessage, {
 			key: `agents-copied-${getNextComponentKey()}`,
-			message: `Copied agent '${agentName}' to .nanocoder/agents/${safeName}\nYou can now modify this file to customize the agent.`,
+			message: `Copied agent '${agentName}' to .derek/agents/${safeName}\nYou can now modify this file to customize the agent.`,
 			hideBox: true,
 		}),
 	);
@@ -363,7 +363,7 @@ export async function handleCommandCreate(
 		'commands',
 		'commands',
 		(safeName, commandBaseName) =>
-			`I just created a new custom command file at .nanocoder/commands/${safeName}. Help me write the content for this command. Ask me what I want this command to do, then write the markdown prompt into the file using the write_file tool. The file should contain a clear prompt that instructs the AI what to do when this command is invoked via /${commandBaseName}. Keep the YAML frontmatter at the top.
+			`I just created a new custom command file at .derek/commands/${safeName}. Help me write the content for this command. Ask me what I want this command to do, then write the markdown prompt into the file using the write_file tool. The file should contain a clear prompt that instructs the AI what to do when this command is invoked via /${commandBaseName}. Keep the YAML frontmatter at the top.
 
 Here is an example of the frontmatter format with all available fields:
 

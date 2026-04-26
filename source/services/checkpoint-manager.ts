@@ -17,7 +17,7 @@ import {FileSnapshotService} from './file-snapshot';
 
 /**
  * Service for managing conversation checkpoints.
- * Checkpoints are stored in .nanocoder/checkpoints/ within the workspace root.
+ * Checkpoints are stored in .derek/checkpoints/ within the workspace root.
  */
 export class CheckpointManager {
 	private readonly checkpointsDir: string;
@@ -25,7 +25,7 @@ export class CheckpointManager {
 
 	constructor(workspaceRoot: string = process.cwd()) {
 		// nosemgrep
-		this.checkpointsDir = path.join(workspaceRoot, '.nanocoder', 'checkpoints'); // nosemgrep
+		this.checkpointsDir = path.join(workspaceRoot, '.derek', 'checkpoints'); // nosemgrep
 		this.fileSnapshotService = new FileSnapshotService(workspaceRoot);
 	}
 
@@ -94,6 +94,7 @@ export class CheckpointManager {
 		provider: string,
 		model: string,
 		modifiedFiles?: string[],
+		captureGitState = false,
 	): Promise<CheckpointMetadata> {
 		await this.ensureCheckpointsDir();
 
@@ -116,6 +117,31 @@ export class CheckpointManager {
 		const fileSnapshots =
 			await this.fileSnapshotService.captureFiles(filesToSnapshot);
 
+		// Capture git state if requested (for self-modification rollback)
+		let gitState: CheckpointMetadata['gitState'];
+		if (captureGitState) {
+			try {
+				const {execSync} = await import('child_process');
+				const cwd = process.cwd();
+				const branch = execSync('git rev-parse --abbrev-ref HEAD', {cwd})
+					.toString()
+					.trim();
+				const commitHash = execSync('git rev-parse HEAD', {cwd})
+					.toString()
+					.trim();
+				const status = execSync('git status --porcelain', {cwd})
+					.toString()
+					.trim();
+				gitState = {
+					branch,
+					commitHash,
+					hasUncommittedChanges: status.length > 0,
+				};
+			} catch {
+				// Not a git repo or git unavailable — gitState stays undefined
+			}
+		}
+
 		// Create metadata
 		const metadata: CheckpointMetadata = {
 			name: checkpointName,
@@ -124,6 +150,7 @@ export class CheckpointManager {
 			filesChanged: Array.from(fileSnapshots.keys()),
 			provider: {name: provider, model},
 			description: this.generateDescription(messages),
+			gitState,
 		};
 
 		// Create conversation data

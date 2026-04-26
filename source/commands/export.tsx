@@ -52,8 +52,7 @@ export const exportCommand: Command = {
 		{provider, model, tokens},
 	) => {
 		const filename =
-			args[0] ||
-			`nanocoder-chat-${new Date().toISOString().replace(/:/g, '-')}.md`;
+			args[0] || `derek-chat-${new Date().toISOString().replace(/:/g, '-')}.md`;
 		const filepath = path.resolve(process.cwd(), filename); // nosemgrep
 
 		const frontmatter = `---
@@ -63,7 +62,7 @@ model: ${model}
 total_tokens: ${tokens}
 ---
 
-# Nanocoder Chat Export
+# Derek Chat Export
 
 `;
 

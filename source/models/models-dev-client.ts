@@ -363,7 +363,7 @@ export function resetSessionContextLimit(): void {
  * Get context limit for a model
  * Resolution order:
  * 1. Session override (from /context-max command)
- * 2. NANOCODER_CONTEXT_LIMIT env variable
+ * 2. DEREK_CONTEXT_LIMIT env variable
  * 3. models.dev lookup / hardcoded Ollama defaults
  * 4. null (unknown)
  */
@@ -378,7 +378,7 @@ export async function getModelContextLimit(
 		}
 
 		// Check environment variable fallback
-		const envLimit = process.env.NANOCODER_CONTEXT_LIMIT;
+		const envLimit = process.env.DEREK_CONTEXT_LIMIT;
 		if (envLimit) {
 			const parsed = Number.parseInt(envLimit, 10);
 			if (!Number.isNaN(parsed) && parsed > 0) {

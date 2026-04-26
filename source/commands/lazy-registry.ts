@@ -1,7 +1,7 @@
 /**
  * Lazy registry of all built-in slash commands.
  *
- * Keeping this file flat and free of static command imports is how nanocoder
+ * Keeping this file flat and free of static command imports is how derek
  * avoids loading all 31 command modules at startup. Each entry carries the
  * command's `name` and `description` inline (duplicated from the command
  * module so the picker can render without triggering the load), plus a
@@ -92,7 +92,7 @@ export const lazyCommands: LazyCommand[] = [
 	{
 		name: 'init',
 		description:
-			'Initialize nanocoder configuration and analyze project structure. Use --force to regenerate AGENTS.md.',
+			'Initialize derek configuration and analyze project structure. Use --force to regenerate AGENTS.md.',
 		load: () => import('@/commands/init').then(m => m.initCommand),
 	},
 	{
@@ -112,7 +112,7 @@ export const lazyCommands: LazyCommand[] = [
 	},
 	{
 		name: 'update',
-		description: 'Update Nanocoder to the latest version',
+		description: 'Update Derek to the latest version',
 		load: () => import('@/commands/update').then(m => m.updateCommand),
 	},
 	{

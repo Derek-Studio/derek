@@ -63,6 +63,7 @@ function createMockClient(
 			currentModel = model;
 		},
 		getAvailableModels: async () => ['test-model-sonnet-v1'],
+		getFallbackConfig: () => undefined,
 		getContextSize: () => 128000,
 		clearContext: async () => {},
 		getTimeout: () => undefined,
@@ -307,7 +308,7 @@ test.serial('respects abort signal', async t => {
 	);
 
 	t.false(result.success);
-	t.regex(result.error || '', /Aborted/);
+	t.regex(result.error || '', /cancelled|Aborted/i);
 });
 
 // ============================================================================
@@ -661,4 +662,152 @@ test.serial('concurrent agents with same type both complete', async t => {
 	t.is(r2.output, 'Agent 2 found b.ts');
 
 	clearAllSubagentProgress();
+});
+
+test.serial('retries failed executions with exponential backoff', async t => {
+	const toolManager = createMockToolManager();
+	let attemptCount = 0;
+	const sleepDelays: number[] = [];
+	const noopSleep = async (ms: number) => { sleepDelays.push(ms); };
+
+	// Create a client that fails the first few attempts then succeeds
+	const client = {
+		chat: async (): Promise<LLMChatResponse> => {
+			attemptCount++;
+			if (attemptCount <= 2) {
+				throw new Error('Network timeout');
+			}
+			return {
+				choices: [{message: {content: 'Success after retries'}}],
+				toolsDisabled: false,
+			} as unknown as LLMChatResponse;
+		},
+		getCurrentModel: () => 'test-model-sonnet-v1',
+		setModel: () => {},
+		getAvailableModels: async () => ['test-model-sonnet-v1'],
+		getContextSize: () => 128000,
+		clearContext: async () => {},
+		getTimeout: () => undefined,
+		getFallbackConfig: () => undefined,
+	} as unknown as LLMClient;
+
+	const executor = new SubagentExecutor(toolManager, client, process.cwd(), 'normal', noopSleep);
+
+	const result = await executor.execute({
+		subagent_type: 'explore',
+		description: 'Test retry logic',
+	});
+
+	t.true(result.success);
+	t.is(result.output, 'Success after retries');
+	t.is(attemptCount, 3, 'Should have made 3 attempts (2 failures + 1 success)');
+	t.is(sleepDelays.length, 2, 'Should have slept twice (once per failed attempt before the last)');
+	// Second delay should be longer than first (exponential)
+	t.true(sleepDelays[1]! > sleepDelays[0]!, 'Delays should increase exponentially');
+});
+
+test.serial('respects maxRetries configuration', async t => {
+	const toolManager = createMockToolManager();
+	let attemptCount = 0;
+	const noopSleep = async (_ms: number) => {};
+
+	// Create a client that always fails
+	const client = {
+		chat: async (): Promise<LLMChatResponse> => {
+			attemptCount++;
+			throw new Error('Persistent failure');
+		},
+		getCurrentModel: () => 'test-model-sonnet-v1',
+		setModel: () => {},
+		getAvailableModels: async () => ['test-model-sonnet-v1'],
+		getContextSize: () => 128000,
+		clearContext: async () => {},
+		getTimeout: () => undefined,
+		getFallbackConfig: () => undefined,
+	} as unknown as LLMClient;
+
+	const executor = new SubagentExecutor(toolManager, client, process.cwd(), 'normal', noopSleep);
+
+	const result = await executor.execute({
+		subagent_type: 'explore', // explore.md has maxRetries: 5
+		description: 'Test retry limit',
+	});
+
+	t.false(result.success);
+	t.regex(result.error || '', /Failed after 6 attempts/); // 5 retries + 1 initial attempt
+	t.is(attemptCount, 6, 'Should have made 6 attempts (1 initial + 5 retries)');
+});
+
+test.serial('does not retry non-retryable errors', async t => {
+	const toolManager = createMockToolManager();
+	let attemptCount = 0;
+	const noopSleep = async (_ms: number) => {};
+
+	// Create a client that always fails with a non-retryable error
+	const client = {
+		chat: async (): Promise<LLMChatResponse> => {
+			attemptCount++;
+			throw new Error('Execution was cancelled');
+		},
+		getCurrentModel: () => 'test-model-sonnet-v1',
+		setModel: () => {},
+		getAvailableModels: async () => ['test-model-sonnet-v1'],
+		getContextSize: () => 128000,
+		clearContext: async () => {},
+		getTimeout: () => undefined,
+		getFallbackConfig: () => undefined,
+	} as unknown as LLMClient;
+
+	const executor = new SubagentExecutor(toolManager, client, process.cwd(), 'normal', noopSleep);
+
+	const result = await executor.execute({
+		subagent_type: 'explore',
+		description: 'Test non-retryable error',
+	});
+
+	t.false(result.success);
+	t.regex(result.error || '', /cancelled/);
+	t.is(attemptCount, 1, 'Should only make 1 attempt for non-retryable errors');
+});
+
+test.serial('switches to fallback model after primary retries exhausted', async t => {
+	const toolManager = createMockToolManager();
+	const noopSleep = async (_ms: number) => {};
+	const modelsUsed: string[] = [];
+	let currentModel = 'claude-opus-4-20250514';
+
+	const client = {
+		chat: async (): Promise<LLMChatResponse> => {
+			modelsUsed.push(currentModel);
+			if (currentModel === 'claude-opus-4-20250514') {
+				throw new Error('Rate limit exceeded');
+			}
+			return {
+				choices: [{message: {content: 'Fallback succeeded'}}],
+				toolsDisabled: false,
+			} as unknown as LLMChatResponse;
+		},
+		getCurrentModel: () => currentModel,
+		setModel: (model: string) => { currentModel = model; },
+		getAvailableModels: async () => ['claude-opus-4-20250514', 'claude-sonnet-4-20250514'],
+		getFallbackConfig: () => [
+			{model: 'claude-sonnet-4-20250514', afterRetries: 1, maxRetries: 3},
+		],
+		getContextSize: () => 128000,
+		clearContext: async () => {},
+		getTimeout: () => undefined,
+	} as unknown as LLMClient;
+
+	const executor = new SubagentExecutor(toolManager, client, process.cwd(), 'normal', noopSleep);
+
+	const result = await executor.execute({
+		subagent_type: 'explore',
+		description: 'Test fallback model switching',
+	});
+
+	t.true(result.success);
+	t.is(result.output, 'Fallback succeeded');
+	// afterRetries:1 = 1 retry = 2 total attempts on opus, then 1 on sonnet
+	t.is(modelsUsed.filter(m => m === 'claude-opus-4-20250514').length, 2);
+	t.is(modelsUsed.filter(m => m === 'claude-sonnet-4-20250514').length, 1);
 });

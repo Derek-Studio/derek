@@ -2,6 +2,9 @@
 name: reviewer
 description: Read-only code review agent. Use to review recent changes, diffs, or specific files for bugs, security issues, style problems, and improvement suggestions.
 model: inherit
+maxRetries: 5
+exponentialBackoff: true
+baseDelayMs: 1000
 tools:
   - read_file
   - search_file_contents

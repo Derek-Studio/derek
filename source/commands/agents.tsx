@@ -50,9 +50,8 @@ function SubagentsList({subagents}: SubagentsListProps) {
 						</Text>
 					</Box>
 					<Text color={colors.secondary}>
-						Create agents in{' '}
-						<Text color={colors.primary}>.nanocoder/agents/</Text> or use{' '}
-						<Text color={colors.primary}>/agents create {'<name>'}</Text>
+						Create agents in <Text color={colors.primary}>.derek/agents/</Text>{' '}
+						or use <Text color={colors.primary}>/agents create {'<name>'}</Text>
 					</Text>
 				</>
 			) : (

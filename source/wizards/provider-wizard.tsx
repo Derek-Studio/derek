@@ -67,11 +67,11 @@ export function ProviderWizard({
 					try {
 						const providerContent = readFileSync(providerConfigPath, 'utf-8');
 						const providerConfig = JSON.parse(providerContent) as {
-							nanocoder?: {
+							derek?: {
 								providers?: ProviderConfig[];
 							};
 						};
-						loadedProviders = providerConfig.nanocoder?.providers || [];
+						loadedProviders = providerConfig.derek?.providers || [];
 					} catch (err) {
 						logError('Failed to load provider configuration', true, {
 							context: {providerConfigPath},
@@ -208,11 +208,11 @@ export function ProviderWizard({
 					try {
 						const editedContent = readFileSync(providerConfigPath, 'utf-8');
 						const editedConfig = JSON.parse(editedContent) as {
-							nanocoder?: {
+							derek?: {
 								providers?: ProviderConfig[];
 							};
 						};
-						loadedProviders = editedConfig.nanocoder?.providers || [];
+						loadedProviders = editedConfig.derek?.providers || [];
 					} catch (parseErr) {
 						setError(
 							parseErr instanceof Error

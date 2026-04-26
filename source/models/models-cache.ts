@@ -19,7 +19,7 @@ const DEFAULT_CACHE_DIR =
 
 function getCacheDir(): string {
 	const cacheBase = xdgCache || DEFAULT_CACHE_DIR;
-	return path.join(cacheBase, 'nanocoder');
+	return path.join(cacheBase, 'derek');
 }
 
 function getCacheFilePath(): string {

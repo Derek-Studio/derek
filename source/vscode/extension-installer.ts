@@ -47,8 +47,8 @@ export function getVsixPath(): string {
 	// In development: assets folder is at project root
 	// In production (npm install): assets folder is in package root
 	const possiblePaths = [
-		join(__dirname, '../../assets/nanocoder-vscode.vsix'), // development
-		join(__dirname, '../../../assets/nanocoder-vscode.vsix'), // npm installed
+		join(__dirname, '../../assets/derek-vscode.vsix'), // development
+		join(__dirname, '../../../assets/derek-vscode.vsix'), // npm installed
 	];
 
 	for (const path of possiblePaths) {
@@ -117,7 +117,7 @@ export async function getExtensionStatus(): Promise<VSCodeStatus[]> {
 
 				const extensionInstalled = stdout
 					.toLowerCase()
-					.includes('nanocollective.nanocoder-vscode');
+					.includes('nanocollective.derek-vscode');
 
 				return {
 					cli,
@@ -136,7 +136,7 @@ export async function getExtensionStatus(): Promise<VSCodeStatus[]> {
 }
 
 /**
- * Check if the nanocoder VS Code extension is installed in any available VS Code flavor
+ * Check if the derek VS Code extension is installed in any available VS Code flavor
  * @deprecated Use getExtensionStatus() for richer information
  */
 export async function isExtensionInstalled(): Promise<boolean> {

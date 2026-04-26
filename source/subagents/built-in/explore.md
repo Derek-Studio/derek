@@ -2,6 +2,9 @@
 name: explore
 description: Codebase exploration agent. Use when you need to explore file structure, search for patterns, understand code, or gather context without filling your main conversation with search results.
 model: inherit
+maxRetries: 5
+exponentialBackoff: true
+baseDelayMs: 1000
 tools:
   - read_file
   - search_file_contents

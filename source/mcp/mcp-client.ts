@@ -115,7 +115,7 @@ export class MCPClient {
 
 				// Create and connect client
 				const client = new Client({
-					name: 'nanocoder-mcp-client',
+					name: 'derek-mcp-client',
 					version: '1.0.0',
 				});
 
@@ -273,7 +273,7 @@ export class MCPClient {
 			});
 
 			for (const mcpTool of serverTools) {
-				// Convert MCP tool to nanocoder Tool format
+				// Convert MCP tool to derek Tool format
 				// Use the original tool name for better model compatibility
 				const schema = mcpTool.inputSchema as
 					| {

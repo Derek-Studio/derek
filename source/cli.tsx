@@ -34,10 +34,11 @@ if (args.includes('--version') || args.includes('-v')) {
 // Handle --help/-h flag — fast path, no heavy imports
 if (args.includes('--help') || args.includes('-h')) {
 	console.log(`
-Usage: nanocoder [options] [command]
+Usage: derek [options] [command]
 
 Commands:
   copilot login [provider-name]   Log in to GitHub Copilot (device flow). Saves credentials for the "GitHub Copilot" provider.
+  discord                         Start the Discord bot adapter.
 
 Options:
   -v, --version    Show version number
@@ -50,14 +51,30 @@ Options:
   run              Run in non-interactive mode
 
 Examples:
-  nanocoder --provider openrouter --model google/gemini-3.1-flash run "analyze src/app.ts"
-  nanocoder --provider ollama --model llama3.1 --context-max 128k
-  nanocoder run --provider openrouter "refactor database module"
+  derek --provider openrouter --model google/gemini-3.1-flash run "analyze src/app.ts"
+  derek --provider ollama --model llama3.1 --context-max 128k
+  derek run --provider openrouter "refactor database module"
+  derek discord --provider openrouter --model google/gemini-3.1-flash
   `);
 	process.exit(0);
 }
 
+// Extract --provider and --model early (shared by discord, run, and App paths)
+function extractCliFlag(flag: string): string | undefined {
+	const idx = args.findIndex(arg => arg === flag);
+	return idx !== -1 && args[idx + 1] ? args[idx + 1] : undefined;
+}
+const cliProvider = extractCliFlag('--provider');
+const cliModel = extractCliFlag('--model');
+
 async function main(): Promise<void> {
+	// Handle discord subcommand — fast path, no Ink/React imports needed
+	if (args[0] === 'discord') {
+		const {startDiscordBot} = await import('@/discord/bot');
+		await startDiscordBot({provider: cliProvider, model: cliModel});
+		return; // startDiscordBot runs indefinitely
+	}
+
 	// Dynamic imports so the fast-path flag handlers above never pay for them.
 	const [
 		{render},
@@ -81,20 +98,6 @@ async function main(): Promise<void> {
 		if (!isNaN(port) && port > 0 && port < 65536) {
 			vscodePort = port;
 		}
-	}
-
-	// Extract --provider if specified
-	let cliProvider: string | undefined;
-	const providerArgIndex = args.findIndex(arg => arg === '--provider');
-	if (providerArgIndex !== -1 && args[providerArgIndex + 1]) {
-		cliProvider = args[providerArgIndex + 1];
-	}
-
-	// Extract --model if specified
-	let cliModel: string | undefined;
-	const modelArgIndex = args.findIndex(arg => arg === '--model');
-	if (modelArgIndex !== -1 && args[modelArgIndex + 1]) {
-		cliModel = args[modelArgIndex + 1];
 	}
 
 	// Extract --context-max if specified

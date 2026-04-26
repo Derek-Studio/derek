@@ -102,17 +102,28 @@ Current Working Directory: ${process.cwd()}
 Current Date: ${dateStr}`;
 }
 
-function appendAgentsMd(prompt: string): string {
-	const agentsPath = join(process.cwd(), 'AGENTS.md');
-	if (existsSync(agentsPath)) {
-		try {
-			const agentsContent = readFileSync(agentsPath, 'utf-8');
-			return `${prompt}\n\nAdditional Context...\n\n${agentsContent}`;
-		} catch {
-			// Silently skip if unreadable
+function appendProjectContext(prompt: string): string {
+	const cwd = process.cwd();
+	const files: Array<{name: string; heading: string}> = [
+		{name: 'AGENTS.md', heading: 'Project Instructions (AGENTS.md)'},
+		{name: 'VISION.md', heading: 'Project Vision (VISION.md)'},
+		{name: 'TODO.md', heading: 'Current TODO (TODO.md)'},
+	];
+
+	let extra = '';
+	for (const {name, heading} of files) {
+		const filePath = join(cwd, name);
+		if (existsSync(filePath)) {
+			try {
+				const content = readFileSync(filePath, 'utf-8').trim();
+				if (content) extra += `\n\n## ${heading}\n\n${content}`;
+			} catch {
+				// file unreadable — skip silently
+			}
 		}
 	}
-	return prompt;
+
+	return extra ? `${prompt}${extra}` : prompt;
 }
 
 // Search/discovery tools that justify a "prefer native over bash" instruction
@@ -194,6 +205,10 @@ export function buildSystemPrompt(
 				developmentMode === 'plan' ? 'git-tools-readonly' : 'git-tools',
 			),
 		);
+		// Self-modification guardrails — the section defines which paths trigger the protocol
+		if (developmentMode !== 'plan') {
+			sections.push(loadSection('self-modification'));
+		}
 	}
 
 	// Task management — only if create_task is available AND not in plan mode
@@ -244,7 +259,7 @@ ${getSubagentDescriptions()}`;
 
 	// Compose and append AGENTS.md
 	let prompt = sections.filter(Boolean).join('\n\n');
-	prompt = appendAgentsMd(prompt);
+	prompt = appendProjectContext(prompt);
 
 	// Cache for token-counting callers that don't have access to the inputs
 	lastBuiltPrompt = prompt;

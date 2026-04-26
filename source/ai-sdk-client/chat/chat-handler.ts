@@ -137,9 +137,7 @@ export async function handleChat(
 			// ChatGPT/Codex backend requires the system message as a top-level
 			// `instructions` field rather than as an input item. Extract it and
 			// pass via providerOptions so the Responses API includes it.
-			let providerOptions:
-				| Record<string, Record<string, string | boolean>>
-				| undefined;
+			let providerOptions: Record<string, Record<string, unknown>> | undefined;
 			if (providerConfig.sdkProvider === 'chatgpt-codex') {
 				const systemMsg = messages.find(m => m.role === 'system');
 				providerOptions = {
@@ -147,6 +145,13 @@ export async function handleChat(
 						...(systemMsg ? {instructions: systemMsg.content} : {}),
 						store: false,
 					},
+				};
+			}
+			// Merge any provider-level providerOptions from config (e.g. toolStreaming: false for Foundry)
+			if (providerConfig.providerOptions) {
+				providerOptions = {
+					...providerConfig.providerOptions,
+					...providerOptions,
 				};
 			}
 
