@@ -25,7 +25,6 @@ import {messageStore} from './session/message-store.js';
 import type {DiscordConfig, DiscordDevelopmentMode} from './types.js';
 import {formatSessionStatus} from './ui/message-formatter.js';
 import {splitMessage} from './ui/message-splitter.js';
-import {createDetailThread, type DetailThread} from './ui/progress-thread.js';
 import {StatusLine} from './ui/status-line.js';
 
 /** Per-channel processing lock to prevent concurrent responses. */
@@ -278,7 +277,6 @@ async function processUserMessage(
 	const channel = message.channel;
 	if (!('send' in channel)) return;
 	const sendableChannel = channel as TextChannel | ThreadChannel;
-	const isDMChannel = message.channel.type === ChannelType.DM;
 
 	// ── UX model ──────────────────────────────────────────────────────────
 	// The main channel carries Derek's conversation: his text responses and
@@ -289,23 +287,17 @@ async function processUserMessage(
 	// It is deleted at end of run; a durable "✅ Done" marker is posted
 	// separately so channel history retains a turn boundary.
 	//
-	// A DetailThread (opened lazily on the first tool call of the turn)
-	// carries the receipts: tool name + args + full result, one triplet of
-	// append-only messages per call. Turns with no tool calls never spawn
-	// a thread.
+	// Threads are NOT created by default. A queue-prompt UI will (in a
+	// follow-up step) offer the user a choice to fork current or queued
+	// work into a thread when messages pile up mid-run.
 	//
 	// Errors are NOT surfaced with dedicated error messages in the main
-	// channel — we trust Derek to describe them in his follow-up text
-	// response. The raw error is always available in the detail thread.
+	// channel unless they're fatal — we trust Derek to describe them in
+	// his follow-up text response.
 	// ──────────────────────────────────────────────────────────────────────
 
 	const statusLine = new StatusLine(sendableChannel);
 	await statusLine.update('🔄 Thinking…');
-
-	// Lazily created on the first tool call. DM channels and threads-within-
-	// threads can't start threads, so we only try in regular guild text channels.
-	let detailThread: DetailThread | null = null;
-	const canCreateThread = !isDMChannel && 'startThread' in message;
 
 	// Track whether the model is currently generating text (so we can swap
 	// status between "Thinking…" and "Running <tool>…" accurately).
@@ -347,35 +339,13 @@ async function processUserMessage(
 					return requestToolApproval(sendableChannel, toolCall);
 				},
 				onToolStart: async (toolName, args) => {
-					// Lazy thread creation on the first tool call of this turn.
-					if (!detailThread && canCreateThread) {
-						try {
-							const title = truncate(userContent, 80);
-							detailThread = await createDetailThread(
-								channel as TextChannel,
-								message,
-								title,
-							);
-						} catch {
-							// Thread creation can fail (perms, rate limits, etc.) —
-							// not fatal; we just won't have a detail thread for this run.
-						}
-					}
-
 					lastStatusPhase = 'tool';
 					void statusLine.update(`🔄 ${formatToolStatus(toolName, args)}`);
-
-					if (detailThread) {
-						await detailThread.recordStart(toolName, args);
-					}
 				},
-				onToolResult: async (toolName, resultContent, isError) => {
-					if (detailThread) {
-						await detailThread.recordResult(toolName, resultContent, isError);
-					}
-					// The status line will get overwritten imminently — either by
-					// onToken ("Thinking…") or onToolStart (the next tool). Leave
-					// it alone here to avoid a flicker for same-tick chains.
+				onToolResult: async () => {
+					// No-op for now. The status line will get overwritten by the
+					// next onToken ("Thinking…") or onToolStart, and the detail
+					// view (in a follow-up step) will be driven from here.
 				},
 			},
 			abortController.signal,
