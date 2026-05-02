@@ -269,6 +269,34 @@ export class ToolManager {
 		return this.registry.getEntry(toolName);
 	}
 
+	/**
+	 * Register additional `NanocoderToolExport`s into this manager after
+	 * construction. Used by the Discord gateway to add Discord-only tools
+	 * (e.g. task_start) that aren't part of the global `allToolExports`
+	 * array. Silently overwrites any existing tool of the same name.
+	 */
+	registerToolExports(
+		toolExports: Array<import('@/types/core').NanocoderToolExport>,
+	): void {
+		for (const t of toolExports) {
+			this.registry.register({
+				name: t.name,
+				// biome-ignore lint/suspicious/noExplicitAny: Dynamic typing required
+				handler: async (args: any) =>
+					// biome-ignore lint/suspicious/noExplicitAny: Dynamic typing required
+					await (t.tool as any).execute(args, {
+						toolCallId: 'manual',
+						messages: [],
+					}),
+				tool: t.tool,
+				formatter: t.formatter,
+				validator: t.validator,
+				streamingFormatter: t.streamingFormatter,
+				readOnly: t.readOnly,
+			});
+		}
+	}
+
 	getToolNames(): string[] {
 		return this.registry.getToolNames();
 	}

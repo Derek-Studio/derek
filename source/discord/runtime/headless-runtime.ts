@@ -43,6 +43,21 @@ export interface ProcessMessageResult {
 	toolCallCount: number;
 }
 
+export interface ProcessMessageOptions {
+	/**
+	 * Tool names to exclude from the available toolset for this call only.
+	 * Used by tasks to hide task-management tools (no sub-tasks) and by
+	 * the main channel to hide `task_checklist` (only meaningful inside
+	 * a task).
+	 */
+	excludeTools?: string[];
+	/**
+	 * If set, skip the user-message append. Used by `task_continue` where
+	 * the new prompt has already been added to history elsewhere.
+	 */
+	skipUserMessage?: boolean;
+}
+
 /**
  * Headless runtime for Derek — runs the conversation loop without React/Ink.
  *
@@ -85,6 +100,23 @@ export class HeadlessRuntime {
 
 	getClient(): LLMClient | null {
 		return this.client;
+	}
+
+	getToolManager(): ToolManager | null {
+		return this.toolManager;
+	}
+
+	/**
+	 * Register additional Discord-only tools (e.g. task_start) into the
+	 * runtime's ToolManager. Must be called after `initialize()`.
+	 */
+	registerToolExports(
+		toolExports: Array<import('@/types/core').NanocoderToolExport>,
+	): void {
+		if (!this.toolManager) {
+			throw new Error('Runtime not initialized. Call initialize() first.');
+		}
+		this.toolManager.registerToolExports(toolExports);
 	}
 
 	getProvider(): string {
@@ -156,6 +188,7 @@ export class HeadlessRuntime {
 		callbacks: RuntimeCallbacks,
 		signal?: AbortSignal,
 		imageParts?: import('@/types/core').MessageImagePart[],
+		options?: ProcessMessageOptions,
 	): Promise<ProcessMessageResult> {
 		if (!this.client || !this.toolManager) {
 			throw new Error('Runtime not initialized. Call initialize() first.');
@@ -163,20 +196,26 @@ export class HeadlessRuntime {
 
 		const client = this.client;
 
-		// Append user message
-		const userMessage: Message = {
-			role: 'user',
-			content: userContent,
-			...(imageParts?.length ? {imageParts} : {}),
-		};
-		messages.push(userMessage);
+		// Append user message (unless caller prepared history themselves)
+		if (!options?.skipUserMessage) {
+			const userMessage: Message = {
+				role: 'user',
+				content: userContent,
+				...(imageParts?.length ? {imageParts} : {}),
+			};
+			messages.push(userMessage);
+		}
 
 		// Build system prompt
 		const devMode = mode as DevelopmentMode;
-		const availableToolNames = this.toolManager.getAvailableToolNames(
+		let availableToolNames = this.toolManager.getAvailableToolNames(
 			undefined,
 			devMode,
 		);
+		if (options?.excludeTools?.length) {
+			const excludeSet = new Set(options.excludeTools);
+			availableToolNames = availableToolNames.filter(n => !excludeSet.has(n));
+		}
 		const systemPrompt = buildSystemPrompt(
 			devMode,
 			undefined,
