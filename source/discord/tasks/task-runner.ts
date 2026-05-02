@@ -132,6 +132,7 @@ export async function startTask(opts: StartTaskOptions): Promise<TaskRecord> {
 		status: 'running',
 	});
 	taskThread.updateTask(taskStore.get(task.id)!);
+	console.log(`[task ${task.id}] transitioned to running, starting driver`);
 
 	// Fire-and-forget: drive the runtime in the background.
 	void driveTask(task.id, opts.prompt, taskThread, runtime).catch(err => {
@@ -266,7 +267,13 @@ async function driveTask(
 	skipUserMessage = false,
 ): Promise<void> {
 	const task = taskStore.get(taskId);
-	if (!task) return;
+	if (!task) {
+		console.error(`[task ${taskId}] driveTask: task not found in store`);
+		return;
+	}
+	console.log(
+		`[task ${taskId}] driveTask starting, prompt.length=${prompt.length}`,
+	);
 
 	const signal = taskStore.getAbortController(taskId)?.signal;
 
@@ -327,6 +334,10 @@ async function driveTask(
 		// Persist the full history.
 		await messageStore.saveMessages(task.conversationId, result.messages);
 
+		console.log(
+			`[task ${taskId}] processMessage returned, toolCalls=${result.toolCallCount} response.length=${result.response?.length ?? 0}`,
+		);
+
 		// Record the assistant's final response and finalize as succeeded.
 		await taskStore.appendActivity(taskId, {
 			timestampMs: Date.now(),
@@ -342,6 +353,7 @@ async function driveTask(
 		);
 	} catch (err) {
 		const errMsg = err instanceof Error ? err.message : String(err);
+		console.error(`[task ${taskId}] processMessage threw: ${errMsg}`);
 		const cancelled =
 			signal?.aborted ||
 			errMsg.toLowerCase().includes('cancelled') ||

@@ -41,8 +41,12 @@ const taskStartCoreTool = tool({
 	}),
 	needsApproval: false,
 	execute: async (args: TaskStartArgs): Promise<string> => {
+		console.log(
+			`[task_start] called title=${JSON.stringify(args.title?.slice(0, 80))} prompt.length=${args.prompt?.length}`,
+		);
 		const ctx = getTaskInvocationContext();
 		if (!ctx) {
+			console.error('[task_start] no invocation context');
 			return 'Error: task_start can only be called from within a Discord conversation.';
 		}
 		try {
@@ -53,11 +57,15 @@ const taskStartCoreTool = tool({
 				title: args.title,
 				prompt: args.prompt,
 			});
+			console.log(
+				`[task_start] task=${task.id} status=${task.status} threadId=${task.threadId}`,
+			);
 			const threadUrl = task.threadId
 				? `https://discord.com/channels/${ctx.parentGuildId ?? '@me'}/${task.threadId}`
 				: '(no thread)';
 			return `Started task \`${task.id}\` "${task.title}". Thread: ${threadUrl}\nThe task is now running in the background. It will post a notification in this channel when it completes.`;
 		} catch (err) {
+			console.error('[task_start] startTask threw:', err);
 			return `Error: ${err instanceof Error ? err.message : String(err)}`;
 		}
 	},

@@ -33,11 +33,22 @@ import {splitMessage} from './ui/message-splitter.js';
 import {StatusLine} from './ui/status-line.js';
 
 /**
- * Tools the main-channel agent should NOT see — `task_checklist` is only
- * meaningful inside a task's own runtime. All other task tools (start,
- * status, interrupt, continue, wait) are available here.
+ * Tools the main-channel agent should NOT see.
+ *
+ * - `task_checklist` is only meaningful inside a task's own runtime.
+ * - `create_task` / `update_task` / `list_tasks` / `delete_task` are a
+ *   per-cwd todo-list the CLI uses as scratch memory. In the Discord
+ *   runtime they serve no purpose and collide semantically with the
+ *   real Task system (`task_start` etc.), so we hide them. If an agent
+ *   wants persistent per-project notes it should use TODO.md.
  */
-const MAIN_CHANNEL_EXCLUDED_TOOLS = ['task_checklist'];
+const MAIN_CHANNEL_EXCLUDED_TOOLS = [
+	'task_checklist',
+	'create_task',
+	'update_task',
+	'list_tasks',
+	'delete_task',
+];
 
 // ─── Per-Channel State Machine ─────────────────────────────────────────────
 //
