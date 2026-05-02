@@ -216,6 +216,13 @@ export function buildSystemPrompt(
 		sections.push(loadSection('task-management'));
 	}
 
+	// Discord tasks — only in the Discord runtime (detected by task_start being
+	// registered). Teaches the agent when/how to use background tasks and how
+	// to interpret the ACTIVE TASKS auto-inject block.
+	if (toolSet.has('task_start') || toolSet.has('task_checklist')) {
+		sections.push(loadSection('discord-tasks'));
+	}
+
 	// Web tools — only if web_search or fetch_url are available
 	if (toolSet.has('web_search') || toolSet.has('fetch_url')) {
 		sections.push(loadSection('web-tools'));

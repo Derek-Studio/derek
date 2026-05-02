@@ -10,7 +10,7 @@ import {
 } from 'discord.js';
 import type {MessageImagePart} from '@/types/core';
 import {type ProcessedAttachments, processAttachments} from './attachments.js';
-import {HeadlessRuntime} from './runtime/headless-runtime.js';
+import type {HeadlessRuntime} from './runtime/headless-runtime.js';
 import {requestToolApproval} from './runtime/tool-approval.js';
 import {
 	autoCompact,
@@ -22,59 +22,56 @@ import {
 	discordSessionStore,
 } from './session/discord-session.js';
 import {messageStore} from './session/message-store.js';
+import {buildActiveTasksBlock} from './tasks/active-tasks-block.js';
+import {withTaskInvocationContext} from './tasks/task-invocation-context.js';
+import {bindTaskRuntime, interruptTask} from './tasks/task-runner.js';
+import {taskStore} from './tasks/task-store.js';
+import {allTaskTools} from './tasks/task-tools.js';
 import type {DiscordConfig, DiscordDevelopmentMode} from './types.js';
 import {formatSessionStatus} from './ui/message-formatter.js';
 import {splitMessage} from './ui/message-splitter.js';
-import {
-	parseQueueButtonId,
-	QUEUE_BUTTON_PREFIX,
-	QueuePrompt,
-} from './ui/queue-prompt.js';
 import {StatusLine} from './ui/status-line.js';
+
+/**
+ * Tools the main-channel agent should NOT see — `task_checklist` is only
+ * meaningful inside a task's own runtime. All other task tools (start,
+ * status, interrupt, continue, wait) are available here.
+ */
+const MAIN_CHANNEL_EXCLUDED_TOOLS = ['task_checklist'];
 
 // ─── Per-Channel State Machine ─────────────────────────────────────────────
 //
 // Each channel carrying a conversation has a single ChannelRunState that
-// tracks whether Derek is currently running a turn and what messages have
-// arrived while he was busy. At most one agent turn runs per channel at
-// any time. Messages that arrive during an active run are queued and
-// drained as a single combined turn when the active run completes.
-//
-// This replaces the previous promise-chain `channelLocks` approach, which
-// serialised correctly but made it hard to (a) see how many messages
-// were queued up, (b) expose buttons to redirect them, and (c) combine
-// multiple queued messages into a single turn.
+// tracks whether Derek is currently running a main-channel turn and what
+// messages arrived while he was busy. Parallel work is handled by *tasks*
+// (see ./tasks/), which run in their own Discord threads and do not block
+// the main channel. The per-channel queue here only serialises main-channel
+// turns.
 
 /** One queued user message, fully resolved (attachments already processed). */
 interface QueuedMessage {
-	/** The raw discord.js Message — retained so we can start threads off it. */
 	discordMessage: DiscordJsMessage;
-	/** Bot-mention-stripped content. May be empty if message was just attachments. */
 	content: string;
 	authorUsername: string;
-	/** Pre-processed attachments: images + inlined text blocks + skip notes. */
 	attachments: ProcessedAttachments;
 	receivedAt: number;
 }
 
 interface ActiveRun {
 	controller: AbortController;
-	/** The set of queued-message ids that this run consumed, for display. */
 	consumedIds: string[];
 	startedAt: number;
-	/** Stored so Phase 6 (swap_to_thread) can re-run the same input in a thread. */
 	userContent: string;
 	imageParts: MessageImagePart[];
 	triggerMessage: DiscordJsMessage;
 }
 
 interface ChannelRunState {
-	/** Non-null iff a `runAgentTurn` is currently executing for this channel. */
 	active: ActiveRun | null;
-	/** Messages received while `active` was non-null. Drained into next run. */
 	queued: QueuedMessage[];
-	/** UI message offering buttons when `queued.length > 0 && active !== null`. */
-	queuePrompt: QueuePrompt | null;
+	/** Timestamp when the previous turn started; used to surface tasks that
+	 * completed since then in the auto-injected ACTIVE TASKS block. */
+	lastTurnStartedAt: number;
 }
 
 const channelStates = new Map<string, ChannelRunState>();
@@ -82,7 +79,7 @@ const channelStates = new Map<string, ChannelRunState>();
 function getChannelState(channelId: string): ChannelRunState {
 	let state = channelStates.get(channelId);
 	if (!state) {
-		state = {active: null, queued: [], queuePrompt: null};
+		state = {active: null, queued: [], lastTurnStartedAt: 0};
 		channelStates.set(channelId, state);
 	}
 	return state;
@@ -90,17 +87,19 @@ function getChannelState(channelId: string): ChannelRunState {
 
 /**
  * Resolve the working directory for a new session in a channel.
- * For existing sessions, session.workingDirectory takes priority — see processUserMessage.
  */
-function defaultWorkingDirectory(config: DiscordConfig): string {
-	return config.workingDirectory;
+function defaultWorkingDirectory(
+	config: DiscordConfig,
+	channelId: string,
+): string {
+	return config.channelProjectMapping[channelId] ?? config.workingDirectory;
 }
 
-const MISSED_MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // ignore messages older than 24h
+const MISSED_MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
- * On startup, fetch messages that arrived in active channels while the bot was offline
- * and process them in order so nothing gets dropped during restarts.
+ * On startup, fetch messages that arrived in active channels while the bot
+ * was offline and process them in order.
  */
 async function replayMissedMessages(
 	client: Client,
@@ -116,8 +115,6 @@ async function replayMissedMessages(
 			const channel = await client.channels.fetch(session.channelId);
 			if (!channel || !channel.isTextBased()) continue;
 
-			// Fetch messages after the last one we processed (Discord returns newest-first,
-			// but `after` returns in ascending order so we get chronological order)
 			const fetched = await (
 				channel as TextChannel | ThreadChannel
 			).messages.fetch({
@@ -136,8 +133,6 @@ async function replayMissedMessages(
 				`Replaying ${missed.length} missed message(s) for channel ${session.channelId}`,
 			);
 
-			// Process each missed message in order through the normal handler
-			// (channel lock ensures they're serialised)
 			for (const msg of missed) {
 				await handleMessage(client, config, runtime, msg);
 			}
@@ -155,6 +150,14 @@ export function setupGatewayHandlers(
 	config: DiscordConfig,
 	runtime: HeadlessRuntime,
 ): void {
+	// Initialise task persistence + register task tools + bind runtime
+	// references for the task tools to use.
+	void taskStore.initialize().catch(err => {
+		console.error('Failed to initialise task store:', err);
+	});
+	runtime.registerToolExports(allTaskTools);
+	bindTaskRuntime(client, runtime);
+
 	client.on('messageCreate', async (message: DiscordJsMessage) => {
 		try {
 			await handleMessage(client, config, runtime, message);
@@ -174,16 +177,8 @@ export function setupGatewayHandlers(
 				);
 				return;
 			}
-			if (
-				interaction.isButton() &&
-				interaction.customId.startsWith(`${QUEUE_BUTTON_PREFIX}:`)
-			) {
-				await handleQueueButton(interaction, config, runtime);
-				return;
-			}
-			// Other component interactions (tool-approval buttons) are
-			// awaited via awaitMessageComponent inside requestToolApproval,
-			// not routed through here.
+			// Tool-approval buttons are awaited via awaitMessageComponent inside
+			// requestToolApproval; they don't route through here.
 		} catch (error) {
 			console.error('Error handling interaction:', error);
 			if (interaction.isRepliable() && !interaction.replied) {
@@ -194,7 +189,6 @@ export function setupGatewayHandlers(
 		}
 	});
 
-	// On startup, process any messages that arrived while the bot was offline
 	client.once('clientReady', () => {
 		replayMissedMessages(client, config, runtime).catch(err => {
 			console.error('Error replaying missed messages:', err);
@@ -203,13 +197,6 @@ export function setupGatewayHandlers(
 }
 
 // ─── Message Ingestion ────────────────────────────────────────────────────
-//
-// `handleMessage` is the single entry point for incoming Discord messages.
-// It validates allowlists, resolves attachments, then enqueues the message
-// against the channel's state. If no run is active, it kicks off
-// `drainQueueAndRun`. Otherwise the message sits in the queue until the
-// active run completes, at which point all pending messages are combined
-// into one user turn.
 
 async function handleMessage(
 	client: Client,
@@ -243,7 +230,6 @@ async function handleMessage(
 
 	const attachments = await processAttachments(message);
 
-	// Skip silently if there's nothing actionable
 	if (
 		!content &&
 		attachments.imageParts.length === 0 &&
@@ -267,40 +253,19 @@ async function handleMessage(
 	state.queued.push(queued);
 
 	if (state.active) {
-		// A run is in progress — leave the message queued and surface a
-		// prompt with the redirect buttons. Prompt edits in place as more
-		// messages queue.
-		const channel = message.channel;
-		if ('send' in channel) {
-			const sendable = channel as TextChannel | ThreadChannel;
-			if (!state.queuePrompt) {
-				const nonce = makeQueueNonce();
-				state.queuePrompt = new QueuePrompt(sendable, nonce);
-			}
-			void state.queuePrompt.update(state.queued.length);
-		}
+		// A run is in progress — the message waits silently. The user can
+		// start parallel work themselves (by the agent calling task_start
+		// next turn) or interrupt via /stop. No queue-prompt UI.
 		return;
 	}
 
-	// No active run — start draining immediately.
 	await drainQueueAndRun(config, runtime, channelId);
 }
 
 /**
- * Random nonce embedded in queue-prompt button customIds so we can detect
- * stale presses (button from an earlier prompt that's since been replaced).
- */
-function makeQueueNonce(): string {
-	return Math.random().toString(36).slice(2, 10);
-}
-
-/**
  * Pull every queued message off `state.queued`, combine them into a single
- * user turn, and run the agent loop. On completion, recurse if more messages
- * arrived during the run.
- *
- * Idempotent: returns immediately if already running. The caller is expected
- * to hold off and let the outer state machine call us again.
+ * user turn, and run the agent loop. Loops if more messages arrive during
+ * a turn so they drain together into the next one.
  */
 async function drainQueueAndRun(
 	config: DiscordConfig,
@@ -309,20 +274,9 @@ async function drainQueueAndRun(
 ): Promise<void> {
 	const state = getChannelState(channelId);
 
-	// Loop in case more messages arrive during a turn — drain them together
-	// in the next iteration rather than firing two separate runs.
 	while (state.queued.length > 0 && !state.active) {
 		const batch = state.queued.splice(0, state.queued.length);
-		// The queue is being drained into a turn — the prompt is no longer
-		// actionable. Dismiss it before the run starts.
-		if (state.queuePrompt) {
-			void state.queuePrompt.dismiss();
-			state.queuePrompt = null;
-		}
 		const {userContent, imageParts} = buildCombinedUserContent(batch);
-
-		// `triggerMessage` is the message we anchor a thread off if we ever
-		// need to. The first message in the batch is conventional.
 		const triggerMessage = batch[0].discordMessage;
 
 		const controller = new AbortController();
@@ -346,22 +300,13 @@ async function drainQueueAndRun(
 				signal: controller.signal,
 			});
 		} catch (err) {
-			// runAgentTurn handles its own UI for errors/cancellation. If
-			// something escapes (programming error) log it loudly so we know.
 			console.error(`runAgentTurn escaped error in channel ${channelId}:`, err);
 		} finally {
 			state.active = null;
 		}
-		// Loop continues if more messages queued up while we were running.
 	}
 }
 
-/**
- * Combine N queued messages into a single user-content payload + merged image
- * list. Single-message form preserves today's `[username]: ...` framing.
- * Multi-message form uses a numbered list so the LLM can see the messages
- * are distinct (per spec — they may matter as separate thoughts).
- */
 function buildCombinedUserContent(batch: QueuedMessage[]): {
 	userContent: string;
 	imageParts: MessageImagePart[];
@@ -400,9 +345,6 @@ function buildCombinedUserContent(batch: QueuedMessage[]): {
 		};
 	}
 
-	// Multiple messages — present as a list. The framing tells the model that
-	// these were sent as separate Discord messages (so order/segmentation
-	// might be meaningful) but should be addressed together as one turn.
 	const sections = batch.map((m, i) => {
 		const body = renderOne(m);
 		return `**${i + 1}.** [${m.authorUsername}]: ${body}`;
@@ -420,23 +362,13 @@ interface RunAgentTurnArgs {
 	config: DiscordConfig;
 	runtime: HeadlessRuntime;
 	channelId: string;
-	/** Discord message we should anchor any thread/UI off. */
 	triggerMessage: DiscordJsMessage;
 	userContent: string;
 	imageParts: MessageImagePart[];
 	signal: AbortSignal;
-	/** Override where status + response messages are sent (used for forked threads). */
 	sendTo?: TextChannel | ThreadChannel;
 }
 
-/**
- * Run a single agent turn against the given channel's session, posting the
- * standard StatusLine + durable response + Done marker UX. Throws on fatal
- * errors after rendering them in the channel.
- *
- * Extracted from the old `processUserMessage` so Phase 4+ can call it for
- * forked-thread runs as well as main-channel runs.
- */
 async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 	const {
 		config,
@@ -450,20 +382,25 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 	const guildId = triggerMessage.guild?.id;
 	const conversationId = DiscordSessionStore.conversationId(channelId, guildId);
 
-	// Get or create session — existing session CWD takes priority over defaults
+	// Get or create session
 	let session = discordSessionStore.getSession(conversationId);
 	if (!session) {
 		session = await discordSessionStore.createSession({
 			channelId,
 			guildId,
-			workingDirectory: defaultWorkingDirectory(config),
+			workingDirectory: defaultWorkingDirectory(config, channelId),
 		});
 	}
 	await discordSessionStore.touchSession(conversationId);
 
 	const workingDir = session.workingDirectory;
 
-	// Switch to the channel's working directory before processing
+	// Switch to the channel's working directory before processing.
+	// NOTE: this is a process-wide mutation and races with any concurrent
+	// run in a *different* channel. Tasks inherit their parent channel's
+	// cwd so tasks started from this channel all share the same cwd,
+	// which is safe. Cross-channel races exist today and are out of scope
+	// for the tasks v2 work — see TASKS_PLAN.md §1.3.
 	const previousCwd = process.cwd();
 	try {
 		process.chdir(workingDir);
@@ -493,45 +430,71 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 	let streamBuffer = '';
 	let liveToolCount = 0;
 
+	// Build the ACTIVE TASKS auto-inject block, using the *previous* turn's
+	// start timestamp so we catch tasks that finished during the gap.
+	const state = getChannelState(channelId);
+	const previousTurnStartedAt = state.lastTurnStartedAt;
+	state.lastTurnStartedAt = Date.now();
+	const activeTasks = buildActiveTasksBlock(channelId, previousTurnStartedAt);
+
+	// Prepend the ACTIVE TASKS block (if any) to the user turn content so
+	// the agent sees it at the top of its context for this turn.
+	const effectiveUserContent = activeTasks.text
+		? `${activeTasks.text}\n\n---\n\n${userContent}`
+		: userContent;
+
 	try {
-		const result = await runtime.processMessage(
-			messages,
-			userContent,
-			session.mode,
+		const result = await withTaskInvocationContext(
 			{
-				onToken: (token: string) => {
-					streamBuffer += token;
-					if (lastStatusPhase !== 'thinking') {
-						lastStatusPhase = 'thinking';
-						void statusLine.update('🔄 Thinking…');
-					}
-				},
-				onToolApproval: async toolCall => {
-					lastStatusPhase = 'approval';
-					void statusLine.update(
-						`⏸ Waiting for approval on \`${toolCall.function.name}\`…`,
-					);
-					return requestToolApproval(sendableChannel, toolCall);
-				},
-				onToolStart: async (toolName, toolArgs) => {
-					liveToolCount++;
-					lastStatusPhase = 'tool';
-					void statusLine.update(
-						`🔄 ${formatToolStatus(toolName, toolArgs, liveToolCount)}`,
-					);
-				},
-				onToolResult: async () => {
-					// No-op — next onToken or onToolStart updates the status.
-				},
+				parentChannelId: channelId,
+				parentGuildId: guildId,
+				parentTriggerMessage: triggerMessage,
 			},
-			signal,
-			imageParts.length > 0 ? imageParts : undefined,
+			() =>
+				runtime.processMessage(
+					messages,
+					effectiveUserContent,
+					session.mode,
+					{
+						onToken: (token: string) => {
+							streamBuffer += token;
+							if (lastStatusPhase !== 'thinking') {
+								lastStatusPhase = 'thinking';
+								void statusLine.update('🔄 Thinking…');
+							}
+						},
+						onToolApproval: async toolCall => {
+							lastStatusPhase = 'approval';
+							void statusLine.update(
+								`⏸ Waiting for approval on \`${toolCall.function.name}\`…`,
+							);
+							return requestToolApproval(sendableChannel, toolCall);
+						},
+						onToolStart: async (toolName, toolArgs) => {
+							liveToolCount++;
+							lastStatusPhase = 'tool';
+							void statusLine.update(
+								`🔄 ${formatToolStatus(toolName, toolArgs, liveToolCount)}`,
+							);
+						},
+						onToolResult: async () => {},
+					},
+					signal,
+					imageParts.length > 0 ? imageParts : undefined,
+					{excludeTools: MAIN_CHANNEL_EXCLUDED_TOOLS},
+				),
 		);
 
 		await messageStore.saveMessages(conversationId, result.messages);
 		await discordSessionStore.updateSession(conversationId, {
 			lastProcessedMessageId: triggerMessage.id,
 		});
+
+		// Mark the just-shown terminal tasks as acknowledged so they don't
+		// reappear on the next turn.
+		if (activeTasks.acknowledgeIds.length > 0) {
+			await taskStore.acknowledge(activeTasks.acknowledgeIds);
+		}
 
 		const response = result.response.trim() || '*(no response)*';
 		const chunks = splitMessage(response);
@@ -555,20 +518,13 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 		await statusLine.clear();
 
 		if (wasCancelled) {
-			const isSwap = signal.reason === 'swap_to_thread';
-			if (isSwap) {
-				await sendableChannel
-					.send('⏭ Moving this run to a background thread…')
-					.catch(() => {});
-			} else {
-				const buffered = streamBuffer.trim();
-				const tail = buffered
-					? `\n\n**Partial output before stop:**\n${truncate(buffered, 1500)}`
-					: '';
-				await sendableChannel
-					.send(`⏹ Stopped.${tail}\n\nWhat would you like done differently?`)
-					.catch(() => {});
-			}
+			const buffered = streamBuffer.trim();
+			const tail = buffered
+				? `\n\n**Partial output before stop:**\n${truncate(buffered, 1500)}`
+				: '';
+			await sendableChannel
+				.send(`⏹ Stopped.${tail}\n\nWhat would you like done differently?`)
+				.catch(() => {});
 		} else {
 			await sendableChannel
 				.send(`❌ Error: ${truncate(errorMsg, 1900)}`)
@@ -601,12 +557,13 @@ const TOOL_VERBS: Record<string, string> = {
 	git_branch: 'Branching',
 	agent: 'Spawning agent',
 	ask_user: 'Asking user',
+	task_start: 'Starting task',
+	task_status: 'Checking task',
+	task_interrupt: 'Interrupting task',
+	task_continue: 'Continuing task',
+	task_wait: 'Waiting on task',
 };
 
-/**
- * Short one-line summary of a tool invocation for the status bar.
- * Uses a human-readable verb where known, falls back to the raw tool name.
- */
 function formatToolStatus(
 	toolName: string,
 	args: Record<string, unknown>,
@@ -617,7 +574,16 @@ function formatToolStatus(
 
 	if (!args || typeof args !== 'object') return `${verb} ${countStr}`;
 
-	for (const key of ['path', 'file_path', 'command', 'query', 'url', 'name']) {
+	for (const key of [
+		'path',
+		'file_path',
+		'command',
+		'query',
+		'url',
+		'name',
+		'title',
+		'taskId',
+	]) {
 		if (key in args) {
 			const v = args[key];
 			if (typeof v === 'string' && v.length > 0) {
@@ -633,246 +599,12 @@ function truncate(s: string, max: number): string {
 	return `${s.slice(0, max)}…`;
 }
 
-// ─── Forked-Thread Runner ─────────────────────────────────────────────────
-
-/**
- * Create a Discord thread from `triggerMessage`, fork the parent channel's
- * session and message history into it, then run the agent turn there.
- *
- * Used by both queue buttons:
- *   • "background" — queued messages run in the thread while main continues
- *   • "swap_to_thread" — the aborted main run is re-run in the thread
- */
-async function forkToThread({
-	config,
-	runtime,
-	parentChannelId,
-	guildId,
-	triggerMessage,
-	userContent,
-	imageParts,
-	threadName,
-}: {
-	config: DiscordConfig;
-	runtime: HeadlessRuntime;
-	parentChannelId: string;
-	guildId: string | undefined;
-	triggerMessage: DiscordJsMessage;
-	userContent: string;
-	imageParts: MessageImagePart[];
-	threadName: string;
-}): Promise<void> {
-	if (!('startThread' in triggerMessage)) {
-		console.warn('[forkToThread] triggerMessage does not support startThread');
-		return;
-	}
-
-	let thread: ThreadChannel;
-	try {
-		thread = await triggerMessage.startThread({
-			name: threadName.slice(0, 100),
-			autoArchiveDuration: 60,
-		});
-	} catch (err) {
-		console.error('[forkToThread] failed to create thread:', err);
-		return;
-	}
-
-	const parentConversationId = DiscordSessionStore.conversationId(
-		parentChannelId,
-		guildId,
-	);
-	const forked = await discordSessionStore.forkSession(
-		parentConversationId,
-		thread.id,
-		guildId,
-	);
-	if (!forked) {
-		await thread
-			.send('❌ Could not fork session — no parent session found.')
-			.catch(() => {});
-		return;
-	}
-
-	// Copy parent message history so the thread has full context
-	const parentMessages = await messageStore.getMessages(parentConversationId);
-	if (parentMessages.length > 0) {
-		await messageStore.saveMessages(forked.conversationId, parentMessages);
-	}
-
-	const controller = new AbortController();
-	await runAgentTurn({
-		config,
-		runtime,
-		channelId: thread.id,
-		triggerMessage,
-		userContent,
-		imageParts,
-		signal: controller.signal,
-		sendTo: thread,
-	});
-
-	// ── Phase 7: feed result back to parent channel ──────────────────────────
-	// Find the final assistant response from the thread's message history and
-	// post a summary to the parent channel, then inject it into the parent's
-	// history so the main agent has context on what the thread did.
-	const threadMessages = await messageStore.getMessages(forked.conversationId);
-	const lastAssistant = [...threadMessages]
-		.reverse()
-		.find(m => m.role === 'assistant' && typeof m.content === 'string');
-
-	if (lastAssistant && typeof lastAssistant.content === 'string') {
-		const responseText = lastAssistant.content.trim();
-		if (!responseText) return;
-
-		const summary = truncate(responseText, 1200);
-		const parentChannel = thread.parent;
-
-		if (parentChannel && 'send' in parentChannel) {
-			await (parentChannel as TextChannel)
-				.send(`📋 **Thread finished** · ${thread.toString()}\n${summary}`)
-				.catch(() => {});
-		}
-
-		// Inject a synthetic exchange into parent history so the next main-channel
-		// run has context on what the thread produced. Uses appendMessage so it
-		// doesn't race with an in-flight main run — the next run will read it.
-		await messageStore.appendMessage(parentConversationId, {
-			role: 'user',
-			content: `[Background thread "${thread.name}" completed. Result below.]`,
-		});
-		await messageStore.appendMessage(parentConversationId, {
-			role: 'assistant',
-			content: responseText,
-		});
-	}
-}
-
-// ─── Queue Prompt Button Handler ──────────────────────────────────────────
-
-async function handleQueueButton(
-	interaction: import('discord.js').ButtonInteraction,
-	config: DiscordConfig,
-	runtime: HeadlessRuntime,
-): Promise<void> {
-	const parsed = parseQueueButtonId(interaction.customId);
-	if (!parsed) {
-		await interaction
-			.reply({content: '❌ Unknown queue action.', ephemeral: true})
-			.catch(() => {});
-		return;
-	}
-
-	const channelId = interaction.channelId;
-	const state = channelStates.get(channelId);
-
-	// Detect stale presses: the prompt this button came from might have been
-	// replaced by a newer one, or already dismissed. In either case, refuse.
-	if (
-		!state ||
-		!state.queuePrompt ||
-		state.queuePrompt.nonce !== parsed.nonce
-	) {
-		await interaction
-			.reply({
-				content:
-					'⚠️ This queue prompt is no longer active (a newer one replaced it, or the queue already drained).',
-				ephemeral: true,
-			})
-			.catch(() => {});
-		return;
-	}
-
-	if (parsed.action === 'background') {
-		// Pull the queued messages out before dismissing the prompt
-		const batch = state.queued.splice(0);
-		void state.queuePrompt.dismiss();
-		state.queuePrompt = null;
-
-		if (batch.length === 0) {
-			await interaction
-				.reply({content: '⚠️ Queue was already empty.', ephemeral: true})
-				.catch(() => {});
-			return;
-		}
-
-		const {userContent, imageParts} = buildCombinedUserContent(batch);
-		const guildId = interaction.guildId ?? undefined;
-		const firstMsg = batch[0].discordMessage;
-		const threadName = `Background: ${truncate(batch[0].content || 'queued task', 80)}`;
-
-		await interaction
-			.reply({
-				content: `🔀 Running ${batch.length} queued message${batch.length === 1 ? '' : 's'} in a background thread…`,
-				ephemeral: true,
-			})
-			.catch(() => {});
-
-		void forkToThread({
-			config,
-			runtime,
-			parentChannelId: channelId,
-			guildId,
-			triggerMessage: firstMsg,
-			userContent,
-			imageParts,
-			threadName,
-		});
-		return;
-	}
-
-	if (parsed.action === 'swap_to_thread') {
-		if (!state.active) {
-			await interaction
-				.reply({content: '⚠️ Nothing is running to swap.', ephemeral: true})
-				.catch(() => {});
-			return;
-		}
-
-		const {userContent, imageParts, triggerMessage} = state.active;
-		const guildId = interaction.guildId ?? undefined;
-		const threadName = `Thread: ${truncate(userContent.replace(/^\[.*?\]:\s*/, ''), 80)}`;
-
-		// Save the queued messages — we'll put them back after aborting so they
-		// drain naturally into the main channel once the abort propagates.
-		const savedQueue = state.queued.splice(0);
-
-		void state.queuePrompt.dismiss();
-		state.queuePrompt = null;
-
-		// Abort the active run with a reason so runAgentTurn posts the right message
-		state.active.controller.abort('swap_to_thread');
-
-		// Re-queue the saved messages for the main channel
-		state.queued.push(...savedQueue);
-
-		await interaction
-			.reply({
-				content: `🧵 Moving current run to a thread${savedQueue.length > 0 ? `, running ${savedQueue.length} queued message${savedQueue.length === 1 ? '' : 's'} here` : ''}.`,
-				ephemeral: true,
-			})
-			.catch(() => {});
-
-		void forkToThread({
-			config,
-			runtime,
-			parentChannelId: channelId,
-			guildId,
-			triggerMessage,
-			userContent,
-			imageParts,
-			threadName,
-		});
-		return;
-	}
-}
-
 // ─── Project Creation ─────────────────────────────────────────────────────
 
 const PROJECT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 async function handleProjectCreate(
-	config: DiscordConfig,
+	_config: DiscordConfig,
 	interaction: ChatInputCommandInteraction,
 	channelId: string,
 	guildId: string | undefined,
@@ -896,7 +628,7 @@ async function handleProjectCreate(
 	const projectDir = path.join('/root/projects', name);
 	if (fs.existsSync(projectDir)) {
 		await interaction.reply({
-			content: `❌ Directory already exists: \`${projectDir}\`\nUse \`/new cwd:${projectDir}\` to link this channel to it instead.`,
+			content: `❌ Directory already exists: \`${projectDir}\`\nUse \`/cwd ${projectDir}\` to switch to it instead.`,
 			ephemeral: true,
 		});
 		return;
@@ -906,13 +638,11 @@ async function handleProjectCreate(
 
 	const steps: string[] = [];
 	try {
-		// 1. Create directory and git repo
 		fs.mkdirSync(projectDir, {recursive: true});
 		execSync('git init', {cwd: projectDir, stdio: 'pipe'});
 		execSync('git checkout -b dev', {cwd: projectDir, stdio: 'pipe'});
 		steps.push('📁 Directory and git repo created');
 
-		// 2. Write starter files
 		const claudeMd = `# ${name}\n\n## Development Commands\n\n\`\`\`bash\n# Add your build/run/test commands here\n\`\`\`\n\n## Architecture\n\nDescribe the project structure here.\n`;
 		const visionMd = `# Vision\n\n## What This Is\n${description}\n\n## End Goal\n<!-- What does the fully realised version look like? -->\n\n## Core Principles\n- <!-- Add guiding constraints -->\n\n## Non-Goals\n- <!-- What this project explicitly does NOT do -->\n`;
 		const todoMd = `# TODO\n\n## Now\n- [ ] Define the project vision in VISION.md\n\n## Next\n\n## Later\n\n## Done\n- [x] Project scaffolded\n`;
@@ -922,7 +652,6 @@ async function handleProjectCreate(
 		fs.writeFileSync(path.join(projectDir, 'TODO.md'), todoMd);
 		steps.push('📝 CLAUDE.md, VISION.md, TODO.md created');
 
-		// 3. Initial commit
 		execSync('git add .', {cwd: projectDir, stdio: 'pipe'});
 		execSync('git commit -m "Initial project setup"', {
 			cwd: projectDir,
@@ -930,7 +659,6 @@ async function handleProjectCreate(
 		});
 		steps.push('✅ Initial commit on `dev`');
 
-		// 4. Create GitHub repo and push
 		const repoUrl = `https://github.com/Derek-Studio/${name}`;
 		try {
 			execSync(
@@ -939,11 +667,9 @@ async function handleProjectCreate(
 			);
 			steps.push(`🐙 GitHub repo created: ${repoUrl}`);
 		} catch {
-			// GitHub creation failed — still usable locally
 			steps.push('⚠️ GitHub repo creation failed — project is local only');
 		}
 
-		// 5. Link this channel to the new project
 		await discordSessionStore.deleteSession(conversationId);
 		await messageStore.clearMessages(conversationId);
 		await discordSessionStore.createSession({
@@ -970,71 +696,6 @@ async function handleProjectCreate(
 	}
 }
 
-// ─── Background Task Runner ───────────────────────────────────────────────
-
-const TASK_UPDATE_INTERVAL = 8; // post a streaming update every N tool calls
-
-async function runBackgroundTask(
-	runtime: HeadlessRuntime,
-	thread: ThreadChannel,
-	prompt: string,
-	cwd: string,
-	mode: DiscordDevelopmentMode,
-	guildId: string | undefined,
-	originChannelId: string,
-	userId: string,
-): Promise<void> {
-	// Background tasks do NOT chdir — that would race with concurrent foreground messages
-	// sharing the same Node.js process. Tool calls that need cwd receive it via the prompt.
-	void cwd;
-
-	let toolCallsSinceUpdate = 0;
-	let currentStepMsg: DiscordJsMessage | null = null;
-
-	try {
-		const result = await runtime.processMessage(
-			[], // fresh history — background tasks are isolated
-			prompt,
-			mode,
-			{
-				onToken: () => {
-					// We don't stream token-by-token into the thread — post on completion
-				},
-				onToolApproval: async () => 'approve', // always approve in background
-				onToolStart: async (toolName, args) => {
-					toolCallsSinceUpdate++;
-					// Post a brief status update every N tool calls so progress is visible
-					if (toolCallsSinceUpdate % TASK_UPDATE_INTERVAL === 1) {
-						const argStr = JSON.stringify(args).slice(0, 80);
-						currentStepMsg = await thread
-							.send(`🔧 \`${toolName}\` — ${argStr}…`)
-							.catch(() => null);
-					}
-				},
-				onToolResult: async () => {},
-			},
-		);
-
-		// Post the final response to the thread
-		const chunks = splitMessage(
-			result.response || '*(task complete — no output)*',
-		);
-		for (const chunk of chunks) {
-			await thread.send(chunk).catch(() => {});
-		}
-
-		// Ping the user in the origin channel
-		const originChannel = thread.parent;
-		if (originChannel && 'send' in originChannel) {
-			await (originChannel as TextChannel).send(
-				`<@${userId}> ✅ Background task finished — ${result.toolCallCount} tool calls. See ${thread}.`,
-			);
-		}
-	} finally {
-		void currentStepMsg;
-	}
-}
-
 // ─── Slash Command Handling ────────────────────────────────────────────────
 
 async function handleSlashCommand(
@@ -1048,31 +709,51 @@ async function handleSlashCommand(
 	const conversationId = DiscordSessionStore.conversationId(channelId, guildId);
 
 	switch (interaction.commandName) {
-		case 'new': {
-			const cwd =
-				interaction.options.getString('cwd') ?? config.workingDirectory;
-			const model = interaction.options.getString('model') ?? undefined;
-			const provider = interaction.options.getString('provider') ?? undefined;
+		case 'cwd': {
+			const newPath = interaction.options.getString('path') ?? null;
+			const session = discordSessionStore.getSession(conversationId);
+			const currentCwd =
+				session?.workingDirectory ?? defaultWorkingDirectory(config, channelId);
 
-			// Delete existing session
-			await discordSessionStore.deleteSession(conversationId);
-			await messageStore.clearMessages(conversationId);
-
-			// Create fresh session
-			await discordSessionStore.createSession({
-				channelId,
-				guildId,
-				workingDirectory: cwd,
-				model,
-				provider,
-			});
-
-			// Switch model/provider in runtime if specified
-			if (model) runtime.setModel(model);
-
-			await interaction.reply(
-				`✅ New session created.\n📁 \`${cwd}\`${model ? `\n🤖 ${model}` : ''}`,
-			);
+			if (!newPath) {
+				const hydrationFiles = ['AGENTS.md', 'VISION.md', 'TODO.md'].map(
+					name => {
+						const exists = fs.existsSync(path.join(currentCwd, name));
+						return `${exists ? '✅' : '❌'} \`${name}\``;
+					},
+				);
+				await interaction.reply(
+					`📁 \`${currentCwd}\`\n\n**Prompt hydration files:**\n${hydrationFiles.join('\n')}`,
+				);
+			} else {
+				if (!fs.existsSync(newPath)) {
+					await interaction.reply({
+						content: `❌ Directory not found: \`${newPath}\``,
+						ephemeral: true,
+					});
+					break;
+				}
+				if (session) {
+					await discordSessionStore.updateSession(conversationId, {
+						workingDirectory: newPath,
+					});
+				} else {
+					await discordSessionStore.createSession({
+						channelId,
+						guildId,
+						workingDirectory: newPath,
+					});
+				}
+				const hydrationFiles = ['AGENTS.md', 'VISION.md', 'TODO.md'].map(
+					name => {
+						const exists = fs.existsSync(path.join(newPath, name));
+						return `${exists ? '✅' : '❌'} \`${name}\``;
+					},
+				);
+				await interaction.reply(
+					`📁 Working directory updated to \`${newPath}\`\n\n**Prompt hydration files:**\n${hydrationFiles.join('\n')}`,
+				);
+			}
 			break;
 		}
 
@@ -1096,17 +777,14 @@ async function handleSlashCommand(
 
 			await interaction.deferReply();
 
-			// Copy message history to the new thread session
 			const parentMessages = await messageStore.getMessages(conversationId);
 
-			// Create a thread
 			const reply = await interaction.fetchReply();
 			const thread = await (reply as DiscordJsMessage).startThread({
 				name: `🔀 ${threadName.slice(0, 95)}`,
 				autoArchiveDuration: 1440,
 			});
 
-			// Create session for the thread
 			const threadConvId = DiscordSessionStore.conversationId(
 				thread.id,
 				guildId,
@@ -1159,9 +837,7 @@ async function handleSlashCommand(
 
 		case 'provider': {
 			const provider = interaction.options.getString('name', true);
-			await discordSessionStore.updateSession(conversationId, {
-				provider,
-			});
+			await discordSessionStore.updateSession(conversationId, {provider});
 			await interaction.reply(
 				`🔌 Provider switched to **${provider}**. Note: a new runtime initialization may be needed for provider changes to fully take effect.`,
 			);
@@ -1182,13 +858,13 @@ async function handleSlashCommand(
 				return;
 			}
 
-			const client = runtime.getClient();
-			if (!client) {
+			const llmClient = runtime.getClient();
+			if (!llmClient) {
 				await interaction.editReply('❌ Runtime not ready.');
 				return;
 			}
 
-			const estimatedTokens = Math.round(
+			const tokens = Math.round(
 				messages.reduce((s, m) => {
 					const t =
 						typeof m.content === 'string'
@@ -1198,10 +874,10 @@ async function handleSlashCommand(
 				}, 0),
 			);
 			await interaction.editReply(
-				`⏳ Summarising ${messages.length} messages (~${estimatedTokens.toLocaleString()} tokens)...`,
+				`⏳ Summarising ${messages.length} messages (~${tokens.toLocaleString()} tokens)...`,
 			);
 
-			const result = await autoCompact(messages, client, true);
+			const result = await autoCompact(messages, llmClient, true);
 			await messageStore.saveMessages(conversationId, result.messages);
 			const method =
 				result.method === 'llm' ? 'LLM summary' : 'hard truncation';
@@ -1251,33 +927,83 @@ async function handleSlashCommand(
 		case 'restart': {
 			await interaction.reply('♻️ Restarting...');
 			console.log('Restart requested via Discord slash command.');
-			// Disconnect cleanly, then exit with code 0.
-			// A process manager (pm2, systemd, shell loop) should restart the process.
 			client.destroy();
 			process.exit(0);
+			break;
+		}
+
+		case 'rebuild': {
+			await interaction.reply('🔨 Building...');
+			const {exec} = await import('node:child_process');
+			const {fileURLToPath} = await import('node:url');
+			const projectRoot = path.resolve(
+				fileURLToPath(import.meta.url),
+				'../../..',
+			);
+			exec(
+				'pnpm run build',
+				{cwd: projectRoot},
+				async (err, _stdout, stderr) => {
+					if (err) {
+						const output = stderr.slice(-1800) || err.message;
+						await interaction.editReply(
+							`❌ Build failed:\n\`\`\`\n${output}\n\`\`\``,
+						);
+						return;
+					}
+					await interaction.editReply('✅ Build complete, restarting...');
+					client.destroy();
+					process.exit(0);
+				},
+			);
 			break;
 		}
 
 		case 'stop': {
 			const scope = interaction.options.getString('scope') ?? 'channel';
 
+			// Task-scoped stop: `task:<id>` cancels a specific task.
+			if (scope.startsWith('task:')) {
+				const taskId = scope.slice('task:'.length);
+				const task = await interruptTask(taskId, 'stopped by operator');
+				if (!task) {
+					await interaction.reply({
+						content: `⚠️ Task \`${taskId}\` not found.`,
+						ephemeral: true,
+					});
+				} else {
+					await interaction.reply({
+						content: `⏹ Interrupting task \`${taskId}\`.`,
+						ephemeral: true,
+					});
+				}
+				break;
+			}
+
 			if (scope === 'all') {
 				let stopped = 0;
 				for (const state of channelStates.values()) {
 					if (state.active) {
 						state.active.controller.abort();
-						if (state.queuePrompt) {
-							void state.queuePrompt.dismiss();
-							state.queuePrompt = null;
-						}
 						state.queued = [];
 						stopped++;
 					}
 				}
+				// Sweep all known channels for active tasks and interrupt them.
+				const seenTasks = new Set<string>();
+				for (const cid of channelStates.keys()) {
+					for (const t of taskStore.listActiveForChannel(cid)) {
+						if (!seenTasks.has(t.id)) {
+							seenTasks.add(t.id);
+							await interruptTask(t.id, 'stopped by operator');
+						}
+					}
+				}
+				const taskCount = seenTasks.size;
 				await interaction.reply({
 					content:
-						stopped > 0
-							? `⏹ Stopped ${stopped} active run${stopped === 1 ? '' : 's'} across all channels and threads.`
+						stopped > 0 || taskCount > 0
+							? `⏹ Stopped ${stopped} active run${stopped === 1 ? '' : 's'} and ${taskCount} task${taskCount === 1 ? '' : 's'}.`
 							: 'Nothing running anywhere right now.',
 					ephemeral: true,
 				});
@@ -1294,10 +1020,6 @@ async function handleSlashCommand(
 				return;
 			}
 			state.active.controller.abort();
-			if (state.queuePrompt) {
-				void state.queuePrompt.dismiss();
-				state.queuePrompt = null;
-			}
 			state.queued = [];
 			await interaction.reply({content: '⏹ Stopping.', ephemeral: true});
 			break;
@@ -1334,55 +1056,6 @@ async function handleSlashCommand(
 					`❌ \`${command}\` (in \`${cwd}\`)\n\`\`\`\n${msg.slice(0, 1800)}\n\`\`\``,
 				);
 			}
-			break;
-		}
-
-		case 'task': {
-			const prompt = interaction.options.getString('prompt', true);
-			const session = discordSessionStore.getSession(conversationId);
-			const taskCwd = session?.workingDirectory ?? config.workingDirectory;
-			const taskMode = session?.mode ?? 'auto-accept';
-
-			const channel = interaction.channel;
-			if (
-				!channel ||
-				(channel.type !== ChannelType.GuildText &&
-					channel.type !== ChannelType.PublicThread &&
-					channel.type !== ChannelType.PrivateThread)
-			) {
-				await interaction.reply({
-					content: '❌ Background tasks require a text channel.',
-					ephemeral: true,
-				});
-				return;
-			}
-
-			// Reply immediately so the user can keep chatting
-			await interaction.reply(
-				`⚡ Task started in a thread. I'll post updates there and ping you when done.`,
-			);
-
-			// Create a thread for the background task
-			const reply = await interaction.fetchReply();
-			const thread = await (reply as DiscordJsMessage).startThread({
-				name: `⚙️ ${prompt.slice(0, 90)}`,
-				autoArchiveDuration: 1440,
-			});
-
-			// Fire-and-forget — does not hold the channel lock
-			runBackgroundTask(
-				runtime,
-				thread,
-				prompt,
-				taskCwd,
-				taskMode,
-				guildId,
-				channelId,
-				interaction.user.id,
-			).catch(err => {
-				const msg = err instanceof Error ? err.message : String(err);
-				thread.send(`❌ Task crashed: ${msg}`).catch(() => {});
-			});
 			break;
 		}
 

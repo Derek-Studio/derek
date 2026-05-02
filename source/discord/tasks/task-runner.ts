@@ -11,6 +11,7 @@ import {
 	discordSessionStore,
 } from '../session/discord-session.js';
 import {messageStore} from '../session/message-store.js';
+import {withCurrentTask} from './task-invocation-context.js';
 import {taskStore} from './task-store.js';
 import {postParentNotification, TaskThread} from './task-thread.js';
 import {
@@ -275,46 +276,52 @@ async function driveTask(
 	);
 
 	try {
-		const result = await runtime.processMessage(
-			history,
-			prompt,
-			'auto-accept', // tasks never block on approval prompts
-			{
-				onToken: (token: string) => {
-					void taskThread.onToken(token);
-				},
-				// Should never be called in auto-accept mode, but if a tool's
-				// needsApproval returns true unconditionally, default to approve.
-				onToolApproval: async () => 'approve',
-				onToolStart: (toolName: string, args: Record<string, unknown>) => {
-					void taskStore.incrementToolCount(taskId);
-					void taskStore.appendActivity(taskId, {
-						timestampMs: Date.now(),
-						kind: 'tool',
-						summary: summariseTool(toolName, args),
-					});
-					void taskThread.recordToolStart(toolName, args);
-					// Refresh header to bump tool count.
-					const t = taskStore.get(taskId);
-					if (t) taskThread.updateTask(t);
-				},
-				onToolResult: (toolName: string, output: string, isError: boolean) => {
-					void taskThread.recordToolResult(toolName, output, isError);
-					if (isError) {
+		const result = await withCurrentTask(taskId, () =>
+			runtime.processMessage(
+				history,
+				prompt,
+				'auto-accept', // tasks never block on approval prompts
+				{
+					onToken: (token: string) => {
+						void taskThread.onToken(token);
+					},
+					// Should never be called in auto-accept mode, but if a tool's
+					// needsApproval returns true unconditionally, default to approve.
+					onToolApproval: async () => 'approve',
+					onToolStart: (toolName: string, args: Record<string, unknown>) => {
+						void taskStore.incrementToolCount(taskId);
 						void taskStore.appendActivity(taskId, {
 							timestampMs: Date.now(),
-							kind: 'error',
-							summary: `${toolName}: ${truncate(output, 180)}`,
+							kind: 'tool',
+							summary: summariseTool(toolName, args),
 						});
-					}
+						void taskThread.recordToolStart(toolName, args);
+						// Refresh header to bump tool count.
+						const t = taskStore.get(taskId);
+						if (t) taskThread.updateTask(t);
+					},
+					onToolResult: (
+						toolName: string,
+						output: string,
+						isError: boolean,
+					) => {
+						void taskThread.recordToolResult(toolName, output, isError);
+						if (isError) {
+							void taskStore.appendActivity(taskId, {
+								timestampMs: Date.now(),
+								kind: 'error',
+								summary: `${toolName}: ${truncate(output, 180)}`,
+							});
+						}
+					},
 				},
-			},
-			signal,
-			undefined,
-			{
-				excludeTools: TASK_MANAGEMENT_TOOL_NAMES,
-				skipUserMessage,
-			},
+				signal,
+				undefined,
+				{
+					excludeTools: TASK_MANAGEMENT_TOOL_NAMES,
+					skipUserMessage,
+				},
+			),
 		);
 
 		// Persist the full history.
