@@ -70,6 +70,20 @@ function truncate(s: string, max: number, marker = '…'): string {
 }
 
 /**
+ * Neutralize characters that would break out of the surrounding fenced
+ * code block in the rendered status message. Agent output (results,
+ * errors) frequently contains triple-backtick fences — if those land
+ * verbatim inside our wrapping ```…``` the message renders broken, with
+ * the tail of the task status spilling out as regular chat markdown.
+ *
+ * We replace backticks with U+02BB (a visually similar modifier letter)
+ * so fences can't re-open and the text remains readable.
+ */
+function sanitizeForCodeBlock(s: string): string {
+	return s.replace(/`/g, 'ʻ');
+}
+
+/**
  * Render the full task status message body. This is the *only* user-
  * visible surface for a task — one message, edited in place. The body
  * is wrapped in a fenced code block so Discord renders it as a single
@@ -102,18 +116,18 @@ export function renderTaskStatus(
 					task.toolCallCount === 1 ? '' : 's'
 				}`;
 
-	const title = truncate(task.title, MAX_TITLE_LEN);
+	const title = sanitizeForCodeBlock(truncate(task.title, MAX_TITLE_LEN));
 	const header = `${statusEmoji(task.status)} ${title} · ${statusWord(task.status)} · ${elapsed}${tools} · task ${task.id}`;
 
 	const lines: string[] = [header];
 
 	if (task.checklist.length > 0) {
-		const items = task.checklist
-			.slice(0, MAX_CHECKLIST_ITEMS)
-			.map(
-				i =>
-					`${checklistGlyph(i.state)} ${truncate(i.label, MAX_CHECKLIST_LABEL_LEN)}`,
+		const items = task.checklist.slice(0, MAX_CHECKLIST_ITEMS).map(i => {
+			const label = sanitizeForCodeBlock(
+				truncate(i.label, MAX_CHECKLIST_LABEL_LEN),
 			);
+			return `${checklistGlyph(i.state)} ${label}`;
+		});
 		if (task.checklist.length > MAX_CHECKLIST_ITEMS) {
 			items.push(
 				`… +${task.checklist.length - MAX_CHECKLIST_ITEMS} more item${
@@ -125,11 +139,17 @@ export function renderTaskStatus(
 	}
 
 	if (task.status === 'succeeded' && task.lastResponse) {
-		lines.push('', `Result: ${truncate(task.lastResponse, MAX_RESULT_LEN)}`);
+		const result = sanitizeForCodeBlock(
+			truncate(task.lastResponse, MAX_RESULT_LEN),
+		);
+		lines.push('', `Result: ${result}`);
 	} else if (task.status === 'failed' && task.error) {
-		lines.push('', `Error: ${truncate(task.error, MAX_ERROR_LEN)}`);
+		const err = sanitizeForCodeBlock(truncate(task.error, MAX_ERROR_LEN));
+		lines.push('', `Error: ${err}`);
 	} else if (task.status === 'cancelled') {
-		const reason = task.error ? `: ${truncate(task.error, MAX_ERROR_LEN)}` : '';
+		const reason = task.error
+			? `: ${sanitizeForCodeBlock(truncate(task.error, MAX_ERROR_LEN))}`
+			: '';
 		lines.push('', `Cancelled${reason}`);
 	}
 
