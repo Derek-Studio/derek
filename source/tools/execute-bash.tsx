@@ -5,6 +5,7 @@ import BashProgress from '@/components/bash-progress';
 import {isDerekToolAlwaysAllowed} from '@/config/derek-tools-config';
 import {TRUNCATION_OUTPUT_LIMIT} from '@/constants';
 import {getCurrentMode} from '@/context/mode-context';
+import {getToolCwd} from '@/discord/tasks/tool-cwd-context';
 import {useTerminalWidth} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {type BashExecutionState, bashExecutor} from '@/services/bash-executor';
@@ -18,11 +19,14 @@ import {jsonSchema, tool} from '@/types/core';
  * @param command - The bash command to execute
  * @returns Object containing executionId and promise for the result
  */
-export function executeBashCommand(command: string): {
+export function executeBashCommand(
+	command: string,
+	options?: {cwd?: string},
+): {
 	executionId: string;
 	promise: Promise<BashExecutionState>;
 } {
-	return bashExecutor.execute(command);
+	return bashExecutor.execute(command, options);
 }
 
 /**
@@ -60,7 +64,7 @@ export function formatBashResultForLLM(result: BashExecutionState): string {
  * and this function serves as a fallback/compatibility layer
  */
 const executeExecuteBash = async (args: {command: string}): Promise<string> => {
-	const {promise} = bashExecutor.execute(args.command);
+	const {promise} = bashExecutor.execute(args.command, {cwd: getToolCwd()});
 	const result = await promise;
 	return formatBashResultForLLM(result);
 };

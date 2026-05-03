@@ -31,7 +31,10 @@ interface ExecutionEntry {
 export class BashExecutor extends EventEmitter {
 	private executions = new Map<string, ExecutionEntry>();
 
-	execute(command: string): {
+	execute(
+		command: string,
+		options?: {cwd?: string},
+	): {
 		executionId: string;
 		promise: Promise<BashExecutionState>;
 	} {
@@ -48,9 +51,10 @@ export class BashExecutor extends EventEmitter {
 			error: null,
 		};
 
+		const spawnOptions = options?.cwd ? {cwd: options.cwd} : undefined;
 		const proc = isWindows
-			? spawn('cmd', ['/c', command])
-			: spawn('sh', ['-c', command]);
+			? spawn('cmd', ['/c', command], spawnOptions)
+			: spawn('sh', ['-c', command], spawnOptions);
 
 		// Collect output
 		proc.stdout.on('data', (data: Buffer) => {

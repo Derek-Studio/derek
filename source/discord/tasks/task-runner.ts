@@ -359,6 +359,10 @@ async function driveTask(
 					// finalisation-nudge guards in the runtime prevent
 					// runaway loops regardless.
 					maxTurns: 250,
+					// Run all tools — file edits, bash, git — against this
+					// task's own working directory (its git worktree once
+					// step 3 lands; the parent channel's cwd until then).
+					cwd: task.workingDirectory,
 				},
 			),
 		);

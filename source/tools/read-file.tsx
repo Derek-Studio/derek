@@ -11,6 +11,7 @@ import {
 	FILE_READ_METADATA_THRESHOLD_LINES,
 	MAX_LINE_LENGTH_CHARS,
 } from '@/constants';
+import {getToolCwd} from '@/discord/tasks/tool-cwd-context';
 import {ThemeContext} from '@/hooks/useTheme';
 import type {NanocoderToolExport} from '@/types/core';
 import {jsonSchema, tool} from '@/types/core';
@@ -25,7 +26,7 @@ const executeReadFile = async (args: {
 	end_line?: number;
 	metadata_only?: boolean;
 }): Promise<string> => {
-	const absPath = resolve(args.path);
+	const absPath = resolve(getToolCwd(), args.path);
 
 	try {
 		// Handle explicit metadata_only request
@@ -330,7 +331,7 @@ const readFileFormatter = async (
 	try {
 		const path = args.path || args.file_path;
 		if (path && typeof path === 'string') {
-			const absPath = resolve(path);
+			const absPath = resolve(getToolCwd(), path);
 			const cached = await getCachedFileContent(absPath);
 			const content = cached.content;
 			const lines = cached.lines;
@@ -390,7 +391,7 @@ const readFileValidator = async (args: {
 
 	// Verify the resolved path stays within project boundaries
 	try {
-		const cwd = process.cwd();
+		const cwd = getToolCwd();
 		resolveFilePath(args.path, cwd);
 	} catch (error) {
 		const errorMessage =
@@ -401,7 +402,7 @@ const readFileValidator = async (args: {
 		};
 	}
 
-	const absPath = resolve(args.path);
+	const absPath = resolve(getToolCwd(), args.path);
 
 	try {
 		await access(absPath, constants.F_OK);

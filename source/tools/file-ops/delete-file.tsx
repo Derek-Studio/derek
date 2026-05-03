@@ -5,6 +5,7 @@ import {Box, Text} from 'ink';
 import React from 'react';
 
 import ToolMessage from '@/components/tool-message';
+import {getToolCwd} from '@/discord/tasks/tool-cwd-context';
 import {ThemeContext} from '@/hooks/useTheme';
 import type {NanocoderToolExport} from '@/types/core';
 import {jsonSchema, tool} from '@/types/core';
@@ -17,7 +18,7 @@ interface DeleteFileArgs {
 }
 
 const executeDeleteFile = async (args: DeleteFileArgs): Promise<string> => {
-	const absPath = resolve(args.path);
+	const absPath = resolve(getToolCwd(), args.path);
 
 	const fileStat = await stat(absPath);
 	if (fileStat.isDirectory()) {
@@ -95,7 +96,7 @@ const deleteFileValidator = async (
 	const pathResult = validatePath(args.path);
 	if (!pathResult.valid) return pathResult;
 
-	const absPath = resolve(args.path);
+	const absPath = resolve(getToolCwd(), args.path);
 
 	try {
 		await access(absPath, constants.F_OK);

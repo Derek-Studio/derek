@@ -408,18 +408,10 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 
 	const workingDir = session.workingDirectory;
 
-	// Switch to the channel's working directory before processing.
-	// NOTE: this is a process-wide mutation and races with any concurrent
-	// run in a *different* channel. Tasks inherit their parent channel's
-	// cwd so tasks started from this channel all share the same cwd,
-	// which is safe. Cross-channel races exist today and are out of scope
-	// for the tasks v2 work — see TASKS_PLAN.md §1.3.
-	const previousCwd = process.cwd();
-	try {
-		process.chdir(workingDir);
-	} catch {
-		process.chdir(config.workingDirectory);
-	}
+	// Per-channel cwd is threaded explicitly into `runtime.processMessage`
+	// via `options.cwd` below. No `process.chdir` — that was a process-
+	// wide mutation that raced with concurrent turns from other channels
+	// and with background tasks that ran after the outer `finally`.
 
 	// Load message history (auto-compact if too long)
 	let messages = await messageStore.getMessages(conversationId);
@@ -494,7 +486,10 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 					},
 					signal,
 					imageParts.length > 0 ? imageParts : undefined,
-					{excludeTools: MAIN_CHANNEL_EXCLUDED_TOOLS},
+					{
+						excludeTools: MAIN_CHANNEL_EXCLUDED_TOOLS,
+						cwd: workingDir,
+					},
 				),
 		);
 
@@ -543,8 +538,6 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 				.send(`❌ Error: ${truncate(errorMsg, 1900)}`)
 				.catch(() => {});
 		}
-	} finally {
-		process.chdir(previousCwd);
 	}
 }
 
