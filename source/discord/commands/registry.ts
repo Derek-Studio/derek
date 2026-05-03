@@ -9,21 +9,14 @@ import type {DiscordConfig} from '../types.js';
 export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommandsJSONBody[] {
 	return [
 		new SlashCommandBuilder()
-			.setName('new')
-			.setDescription('Start a fresh session in this channel')
+			.setName('cwd')
+			.setDescription('Show or change the working directory for this session')
 			.addStringOption(opt =>
 				opt
-					.setName('cwd')
-					.setDescription('Working directory for this session')
-					.setRequired(false),
-			)
-			.addStringOption(opt =>
-				opt.setName('model').setDescription('Model to use').setRequired(false),
-			)
-			.addStringOption(opt =>
-				opt
-					.setName('provider')
-					.setDescription('Provider to use')
+					.setName('path')
+					.setDescription(
+						'New working directory path (omit to just show current)',
+					)
 					.setRequired(false),
 			)
 			.toJSON(),
@@ -94,6 +87,13 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
 			.toJSON(),
 
 		new SlashCommandBuilder()
+			.setName('rebuild')
+			.setDescription(
+				'Recompile the bot source then restart (picks up code changes)',
+			)
+			.toJSON(),
+
+		new SlashCommandBuilder()
 			.setName('stop')
 			.setDescription(
 				'Interrupt the in-progress response in this channel so you can give new feedback',
@@ -101,12 +101,10 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
 			.addStringOption(opt =>
 				opt
 					.setName('scope')
-					.setDescription('What to stop (default: this channel only)')
-					.setRequired(false)
-					.addChoices(
-						{name: 'channel — stop this channel only', value: 'channel'},
-						{name: 'all — stop every active run and thread', value: 'all'},
-					),
+					.setDescription(
+						'What to stop (default: this channel only). Use task:<id> to stop a specific task.',
+					)
+					.setRequired(false),
 			)
 			.toJSON(),
 
@@ -117,17 +115,6 @@ export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommands
 				opt
 					.setName('command')
 					.setDescription('Shell command to run (e.g. git status)')
-					.setRequired(true),
-			)
-			.toJSON(),
-
-		new SlashCommandBuilder()
-			.setName('task')
-			.setDescription('Run a task in the background while you keep chatting')
-			.addStringOption(opt =>
-				opt
-					.setName('prompt')
-					.setDescription('What should Derek work on?')
 					.setRequired(true),
 			)
 			.toJSON(),
