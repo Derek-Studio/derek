@@ -12,26 +12,32 @@ const ELAPSED_REFRESH_INTERVAL_MS = 5000;
 
 const MAX_CHECKLIST_ITEMS = 15;
 const MAX_CHECKLIST_LABEL_LEN = 100;
-const MAX_RESULT_LEN = 1500;
-const MAX_ERROR_LEN = 800;
+// Leaving ~200 chars of headroom for header + checklist + code-block fences
+// within Discord's 2000-char message limit.
+const MAX_RESULT_LEN = 1300;
+const MAX_ERROR_LEN = 700;
 const MAX_TITLE_LEN = 120;
+const SEPARATOR = '───────────────────────';
 
-/**
- * Status badge for the header line.
- */
-function statusBadge(status: TaskStatus): string {
+/** Status emoji for the title line. */
+function statusEmoji(status: TaskStatus): string {
 	switch (status) {
 		case 'pending':
-			return '🟡 pending';
+			return '🟡';
 		case 'running':
-			return '🟢 running';
+			return '🟢';
 		case 'succeeded':
-			return '✅ succeeded';
+			return '✅';
 		case 'failed':
-			return '❌ failed';
+			return '❌';
 		case 'cancelled':
-			return '⏹ cancelled';
+			return '⏹';
 	}
+}
+
+/** Status word for the header line. */
+function statusWord(status: TaskStatus): string {
+	return status;
 }
 
 function checklistGlyph(state: ChecklistItem['state']): string {
@@ -66,8 +72,21 @@ function truncate(s: string, max: number, marker = '…'): string {
 /**
  * Render the full task status message body. This is the *only* user-
  * visible surface for a task — one message, edited in place. The body
- * carries status + elapsed + tool count + optional checklist + optional
- * terminal result/error.
+ * is wrapped in a fenced code block so Discord renders it as a single
+ * monospace card visually distinct from surrounding chat.
+ *
+ * Markdown (bold, inline code) does not render inside code blocks, so
+ * we use plain text and emoji for emphasis instead.
+ *
+ * Layout:
+ *
+ *   ```
+ *   <emoji> <title> · <status> · <elapsed>[ · N tool calls] · task <id>
+ *   <optional: checklist, one per line>
+ *
+ *   [optional: Result: / Error: / Cancelled: line on terminal]
+ *   ───────────────────────
+ *   ```
  */
 export function renderTaskStatus(
 	task: TaskRecord,
@@ -84,7 +103,7 @@ export function renderTaskStatus(
 				}`;
 
 	const title = truncate(task.title, MAX_TITLE_LEN);
-	const header = `${statusBadge(task.status)} **${title}** · ${elapsed}${tools} · \`task ${task.id}\``;
+	const header = `${statusEmoji(task.status)} ${title} · ${statusWord(task.status)} · ${elapsed}${tools} · task ${task.id}`;
 
 	const lines: string[] = [header];
 
@@ -102,22 +121,21 @@ export function renderTaskStatus(
 				}`,
 			);
 		}
-		lines.push('', ...items);
+		lines.push(...items);
 	}
 
 	if (task.status === 'succeeded' && task.lastResponse) {
-		lines.push(
-			'',
-			`**Result:** ${truncate(task.lastResponse, MAX_RESULT_LEN)}`,
-		);
+		lines.push('', `Result: ${truncate(task.lastResponse, MAX_RESULT_LEN)}`);
 	} else if (task.status === 'failed' && task.error) {
-		lines.push('', `**Error:** ${truncate(task.error, MAX_ERROR_LEN)}`);
+		lines.push('', `Error: ${truncate(task.error, MAX_ERROR_LEN)}`);
 	} else if (task.status === 'cancelled') {
 		const reason = task.error ? `: ${truncate(task.error, MAX_ERROR_LEN)}` : '';
-		lines.push('', `**Cancelled**${reason}`);
+		lines.push('', `Cancelled${reason}`);
 	}
 
-	return lines.join('\n');
+	lines.push(SEPARATOR);
+
+	return `\`\`\`\n${lines.join('\n')}\n\`\`\``;
 }
 
 /**
