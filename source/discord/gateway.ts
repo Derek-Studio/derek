@@ -98,6 +98,8 @@ function getChannelState(channelId: string): ChannelRunState {
 
 /**
  * Resolve the working directory for a new session in a channel.
+ * Checks channelProjectMapping first, then falls back to config.workingDirectory.
+ * For existing sessions, session.workingDirectory takes priority — see processUserMessage.
  */
 function defaultWorkingDirectory(
 	config: DiscordConfig,
@@ -727,6 +729,7 @@ async function handleSlashCommand(
 				session?.workingDirectory ?? defaultWorkingDirectory(config, channelId);
 
 			if (!newPath) {
+				// Show current cwd and which hydration files exist
 				const hydrationFiles = ['AGENTS.md', 'VISION.md', 'TODO.md'].map(
 					name => {
 						const exists = fs.existsSync(path.join(currentCwd, name));
@@ -737,6 +740,7 @@ async function handleSlashCommand(
 					`📁 \`${currentCwd}\`\n\n**Prompt hydration files:**\n${hydrationFiles.join('\n')}`,
 				);
 			} else {
+				// Update session cwd in-place, no history clear
 				if (!fs.existsSync(newPath)) {
 					await interaction.reply({
 						content: `❌ Directory not found: \`${newPath}\``,

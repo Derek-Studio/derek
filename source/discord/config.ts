@@ -1,3 +1,6 @@
+import {existsSync, readFileSync} from 'node:fs';
+import {homedir} from 'node:os';
+import {join} from 'node:path';
 import type {DiscordConfig} from './types.js';
 
 function parseCommaSeparated(value: string | undefined): string[] {
@@ -29,6 +32,40 @@ function parseChannelProjectMapping(
 	return mapping;
 }
 
+interface ChannelEntry {
+	id: string;
+	bot: string;
+	cwd: string;
+}
+
+/**
+ * Load channel→cwd mappings from the shared channels.json config.
+ * Each bot reads the file and filters to entries matching its own identity.
+ * File location: ~/.config/derek/channels.json
+ */
+function loadChannelsConfig(botIdentity: string): {
+	allowedChannelIds: string[];
+	channelProjectMapping: Record<string, string>;
+} {
+	const configPath = join(homedir(), '.config', 'derek', 'channels.json');
+	if (!existsSync(configPath)) {
+		return {allowedChannelIds: [], channelProjectMapping: {}};
+	}
+
+	try {
+		const entries: ChannelEntry[] = JSON.parse(
+			readFileSync(configPath, 'utf8'),
+		);
+		const mine = entries.filter(e => e.bot === botIdentity);
+		return {
+			allowedChannelIds: mine.map(e => e.id),
+			channelProjectMapping: Object.fromEntries(mine.map(e => [e.id, e.cwd])),
+		};
+	} catch {
+		return {allowedChannelIds: [], channelProjectMapping: {}};
+	}
+}
+
 export function loadDiscordConfig(): DiscordConfig {
 	const botToken = process.env.DISCORD_BOT_TOKEN;
 	if (!botToken) {
@@ -42,17 +79,27 @@ export function loadDiscordConfig(): DiscordConfig {
 		);
 	}
 
+	const botIdentity = process.env.BOT_IDENTITY ?? 'derek';
+	const channelConfig = loadChannelsConfig(botIdentity);
+
+	// channels.json entries are additive with env-var config; channels.json wins on cwd conflicts
+	const envAllowedChannels = parseCommaSeparated(
+		process.env.DISCORD_ALLOWED_CHANNEL_IDS,
+	);
+	const allAllowedChannels = [
+		...new Set([...envAllowedChannels, ...channelConfig.allowedChannelIds]),
+	];
+
 	return {
 		botToken,
 		applicationId,
 		guildIds: parseCommaSeparated(process.env.DISCORD_GUILD_IDS),
-		allowedChannelIds: parseCommaSeparated(
-			process.env.DISCORD_ALLOWED_CHANNEL_IDS,
-		),
+		allowedChannelIds: allAllowedChannels,
 		workingDirectory: process.env.DISCORD_WORKING_DIRECTORY || process.cwd(),
 		projectsDirectory: process.env.DISCORD_PROJECTS_DIRECTORY || '',
-		channelProjectMapping: parseChannelProjectMapping(
-			process.env.DISCORD_CHANNEL_PROJECTS,
-		),
+		channelProjectMapping: {
+			...parseChannelProjectMapping(process.env.DISCORD_CHANNEL_PROJECTS),
+			...channelConfig.channelProjectMapping,
+		},
 	};
 }
