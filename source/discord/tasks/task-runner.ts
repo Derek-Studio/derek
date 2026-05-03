@@ -353,6 +353,12 @@ async function driveTask(
 				{
 					excludeTools: TASK_MANAGEMENT_TOOL_NAMES,
 					skipUserMessage,
+					// Tasks do long agentic chains — refactors, multi-file
+					// edits, build loops. The default 25-turn cap is far
+					// too tight. Give tasks plenty of room; the
+					// finalisation-nudge guards in the runtime prevent
+					// runaway loops regardless.
+					maxTurns: 250,
 				},
 			),
 		);

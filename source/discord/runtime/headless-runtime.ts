@@ -17,9 +17,18 @@ import type {
 } from '@/types/core';
 import {buildSystemPrompt} from '@/utils/prompt-builder';
 import {parseToolArguments} from '@/utils/tool-args-parser';
+import {getCurrentTaskId} from '../tasks/task-invocation-context.js';
+import {taskStore} from '../tasks/task-store.js';
 import type {DiscordDevelopmentMode} from '../types.js';
 
-const MAX_TURNS = 25;
+/**
+ * Default per-call cap on conversation turns. A "turn" is one LLM
+ * round-trip; one turn can issue many tool calls. Interactive flows use
+ * this default. Task runs override it via `ProcessMessageOptions.maxTurns`
+ * because long agentic chains (refactors, multi-file edits) routinely
+ * burn 4-6 turns per file.
+ */
+const DEFAULT_MAX_TURNS = 25;
 
 export interface RuntimeCallbacks {
 	/** Called with streamed tokens. */
@@ -56,6 +65,13 @@ export interface ProcessMessageOptions {
 	 * the new prompt has already been added to history elsewhere.
 	 */
 	skipUserMessage?: boolean;
+	/**
+	 * Per-call cap on conversation turns. Defaults to `DEFAULT_MAX_TURNS`
+	 * (25) for interactive / main-channel use. Task runs pass a larger
+	 * value (e.g. 250) because long agentic chains can burn many turns
+	 * per file edited.
+	 */
+	maxTurns?: number;
 }
 
 /**
@@ -236,8 +252,15 @@ export class HeadlessRuntime {
 		let finalResponse = '';
 		let approveAll = mode === 'yolo';
 
+		const maxTurns = options?.maxTurns ?? DEFAULT_MAX_TURNS;
+		// Per-loop counters for the finalisation guards. We allow a small
+		// number of "almost done" nudges before giving up and finalising,
+		// so a misbehaving model can't trap the loop forever.
+		const MAX_FINALISATION_NUDGES = 3;
+		let finalisationNudges = 0;
+
 		// Conversation loop
-		for (let turn = 0; turn < MAX_TURNS; turn++) {
+		for (let turn = 0; turn < maxTurns; turn++) {
 			if (signal?.aborted) throw new Error('Operation was cancelled');
 
 			// Call LLM
@@ -295,20 +318,73 @@ export class HeadlessRuntime {
 				}
 			}
 
-			// Add assistant message to history
+			// Add assistant message to history. Push even on empty content so
+			// the history reflects what the model actually returned — the
+			// finalisation guards below depend on accurate accounting.
 			const assistantMsg: Message = {
 				role: 'assistant',
 				content: cleanContent,
 				tool_calls:
 					effectiveToolCalls.length > 0 ? effectiveToolCalls : undefined,
 			};
+			messages.push(assistantMsg);
 
-			if (cleanContent.trim() || effectiveToolCalls.length > 0) {
-				messages.push(assistantMsg);
-			}
-
-			// No tool calls = conversation complete
+			// No tool calls = the model thinks it's done. Two guards before
+			// we agree:
+			//
+			// 1. Empty-text guard (universal). If the response has no tool
+			//    calls AND no text at all, that's almost always a streaming
+			//    hiccup or a malformed tool call — never a real answer.
+			//    Nudge the model to either commit to an answer or call the
+			//    next tool.
+			//
+			// 2. Open-checklist guard (tasks only). If we're inside a task
+			//    and the task's `task_checklist` still has pending/doing
+			//    items, the model is finalising prematurely. Nudge it to
+			//    update the checklist or continue working.
+			//
+			// Both guards re-prompt by appending a system message and
+			// `continue`-ing the loop, capped at MAX_FINALISATION_NUDGES
+			// total so a misbehaving model can't trap the loop forever.
 			if (effectiveToolCalls.length === 0) {
+				const text = cleanContent.trim();
+
+				if (text.length === 0 && finalisationNudges < MAX_FINALISATION_NUDGES) {
+					finalisationNudges++;
+					messages.push({
+						role: 'system',
+						content:
+							'You returned no tool calls and no text. ' +
+							'If your work is complete, respond with the final answer. ' +
+							'Otherwise continue with the next tool call.',
+					});
+					continue;
+				}
+
+				const taskId = getCurrentTaskId();
+				if (taskId && finalisationNudges < MAX_FINALISATION_NUDGES) {
+					const task = taskStore.get(taskId);
+					const open =
+						task?.checklist.filter(
+							i => i.state === 'pending' || i.state === 'doing',
+						) ?? [];
+
+					if (open.length > 0) {
+						finalisationNudges++;
+						const labels = open
+							.map(i => `- ${i.label} (${i.state})`)
+							.join('\n');
+						messages.push({
+							role: 'system',
+							content:
+								`You appear to be ending the task, but your checklist still has ${open.length} unfinished item(s):\n${labels}\n\n` +
+								'If those items are actually done, call task_checklist to update their state to "done" or "skipped" and then respond with your final summary. ' +
+								'If they are not done, continue with the next tool call.',
+						});
+						continue;
+					}
+				}
+
 				finalResponse = cleanContent;
 				break;
 			}
@@ -372,7 +448,7 @@ export class HeadlessRuntime {
 
 			// If the model produced text AND tool calls, capture the text
 			// (the final response will be whatever comes after the last tool loop)
-			if (cleanContent.trim() && turn === MAX_TURNS - 1) {
+			if (cleanContent.trim() && turn === maxTurns - 1) {
 				finalResponse = cleanContent;
 			}
 		}
