@@ -53,8 +53,25 @@ export class TaskStore extends EventEmitter<StoreEvents> {
 			const data = await fs.readFile(this.storePath, 'utf-8');
 			const parsed = JSON.parse(data);
 			if (Array.isArray(parsed)) {
-				for (const entry of parsed as TaskRecord[]) {
+				for (const raw of parsed as Array<Record<string, unknown>>) {
+					const entry = raw as unknown as TaskRecord & {
+						threadId?: string | null;
+						headerMessageId?: string | null;
+					};
 					if (!entry.id) continue;
+
+					// v2 → v3 migration: threadId/headerMessageId became
+					// statusChannelId/statusMessageId. Either field set means
+					// "this came from before the refactor" — best-effort copy.
+					if (entry.statusChannelId === undefined) {
+						entry.statusChannelId = entry.threadId ?? null;
+					}
+					if (entry.statusMessageId === undefined) {
+						entry.statusMessageId = entry.headerMessageId ?? null;
+					}
+					delete entry.threadId;
+					delete entry.headerMessageId;
+
 					// Any task that was mid-flight when the bot stopped is dead.
 					// Record the fact so the agent can see it happened.
 					if (entry.status === 'running' || entry.status === 'pending') {
@@ -94,7 +111,8 @@ export class TaskStore extends EventEmitter<StoreEvents> {
 			parentChannelId: opts.parentChannelId,
 			parentGuildId: opts.parentGuildId,
 			parentConversationId: opts.parentConversationId,
-			threadId: null,
+			statusChannelId: null,
+			statusMessageId: null,
 			conversationId: opts.conversationId,
 			workingDirectory: opts.workingDirectory,
 			title: opts.title,
@@ -105,7 +123,6 @@ export class TaskStore extends EventEmitter<StoreEvents> {
 			startedAt: now,
 			endedAt: null,
 			error: null,
-			headerMessageId: null,
 			acknowledgedAt: null,
 			activity: [],
 			lastResponse: null,

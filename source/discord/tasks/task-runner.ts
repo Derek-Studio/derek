@@ -12,18 +12,21 @@ import {
 } from '../session/discord-session.js';
 import {messageStore} from '../session/message-store.js';
 import {withCurrentTask} from './task-invocation-context.js';
+import {TaskStatusMessage} from './task-status-message.js';
 import {taskStore} from './task-store.js';
-import {postParentNotification, TaskThread} from './task-thread.js';
 import {
 	isTerminal,
 	MAX_CONCURRENT_TASKS_PER_CHANNEL,
 	type TaskRecord,
 } from './task-types.js';
 
+type Sendable = TextChannel | ThreadChannel;
+
 /**
- * Tools the main agent can use to manage tasks. These are removed from the
- * toolset registered into a task's own `processMessage` call so tasks can't
- * spawn sub-tasks. (`task_checklist` is not in this list — tasks can use it.)
+ * Tools the main agent can use to manage tasks. These are removed from
+ * the toolset registered into a task's own `processMessage` call so tasks
+ * can't spawn sub-tasks. (`task_checklist` is not in this list — tasks
+ * can use it.)
  */
 export const TASK_MANAGEMENT_TOOL_NAMES = [
 	'task_start',
@@ -35,15 +38,14 @@ export const TASK_MANAGEMENT_TOOL_NAMES = [
 
 /**
  * Tools to remove from the *main channel* toolset. `task_checklist` is
- * meaningful only inside a task — leaking it to the main channel would
- * be confusing.
+ * meaningful only inside a task.
  */
 export const MAIN_CHANNEL_EXCLUDED_TASK_TOOLS = ['task_checklist'];
 
 /**
- * Cache of the Discord client + parent trigger message, so any task tool
- * called from any channel can resolve the bits it needs to start/continue
- * a task. Set once by the gateway when the runtime is wired up.
+ * Runtime + client references set once by the gateway at setup time so
+ * every task tool can resolve the bits it needs without threading them
+ * through every invocation.
  */
 let runtimeRef: HeadlessRuntime | null = null;
 let clientRef: Client | null = null;
@@ -67,17 +69,19 @@ export function getBoundRuntime(): HeadlessRuntime | null {
 export interface StartTaskOptions {
 	parentChannelId: string;
 	parentGuildId?: string;
-	/** Discord message under which the task thread will be created. */
+	/**
+	 * Discord message whose channel we post the status message into.
+	 * Usually the message that triggered the main-channel turn.
+	 */
 	parentTriggerMessage: DiscordJsMessage;
 	title: string;
 	prompt: string;
 }
 
 /**
- * Start a new task: create the thread, fork the session, kick off the
- * runtime in the background. Returns the task record immediately
- * (status=running by the time we return — the runtime continues in the
- * background).
+ * Start a new task: create the record, post the live status message,
+ * fire-and-forget the runtime. Returns the task record once it's
+ * running in the background.
  */
 export async function startTask(opts: StartTaskOptions): Promise<TaskRecord> {
 	const runtime = runtimeRef;
@@ -104,44 +108,57 @@ export async function startTask(opts: StartTaskOptions): Promise<TaskRecord> {
 		);
 	}
 
+	// Resolve the channel we'll post the status message to. We use the
+	// trigger message's channel so a task started from within a thread
+	// sees its status message in the same thread it was asked from.
+	const triggerChannel = opts.parentTriggerMessage.channel;
+	if (!('send' in triggerChannel) || !('messages' in triggerChannel)) {
+		throw new Error(
+			'Trigger message is not in a text channel or thread — task status message cannot be posted.',
+		);
+	}
+	const statusChannel = triggerChannel as Sendable;
+
 	// Create the task record (pending).
 	const task = taskStore.create({
 		parentChannelId: opts.parentChannelId,
 		parentGuildId: opts.parentGuildId,
 		parentConversationId,
-		// Use a synthetic conversationId for the task's own message history.
+		// Synthetic conversationId for the task's own message history.
 		conversationId: `task:${parentConversationId}:${Date.now()}`,
 		workingDirectory: parentSession.workingDirectory,
 		title: opts.title,
 		initialPrompt: opts.prompt,
 	});
 
-	// Open the Discord thread (lazy create only when we know we're going to run).
-	const taskThread = await TaskThread.create(opts.parentTriggerMessage, task);
-	if (!taskThread) {
+	// Post the live status message.
+	const statusMessage = await TaskStatusMessage.create(statusChannel, task);
+	if (!statusMessage) {
 		await taskStore.update(task.id, {
 			status: 'failed',
-			error: 'Could not create Discord thread for task',
+			error: 'Could not post status message for task',
 		});
-		throw new Error('Failed to create Discord thread for task');
+		throw new Error('Failed to post status message for task');
 	}
 
 	await taskStore.update(task.id, {
-		threadId: taskThread.getThreadId(),
-		headerMessageId: taskThread.getHeaderMessageId(),
+		statusChannelId: statusMessage.getChannelId(),
+		statusMessageId: statusMessage.getMessageId(),
 		status: 'running',
 	});
-	taskThread.updateTask(taskStore.get(task.id)!);
-	console.log(`[task ${task.id}] transitioned to running, starting driver`);
+	statusMessage.updateTask(taskStore.get(task.id)!);
+	console.log(
+		`[task ${task.id}] transitioned to running, status message ${statusMessage.getMessageId()} posted in channel ${statusMessage.getChannelId()}`,
+	);
 
 	// Fire-and-forget: drive the runtime in the background.
-	void driveTask(task.id, opts.prompt, taskThread, runtime).catch(err => {
+	void driveTask(task.id, opts.prompt, statusMessage, runtime).catch(err => {
 		console.error(`[task ${task.id}] driver crashed:`, err);
 		void finalizeTask(
 			task.id,
 			'failed',
 			err instanceof Error ? err.message : String(err),
-			taskThread,
+			statusMessage,
 		);
 	});
 
@@ -149,8 +166,8 @@ export async function startTask(opts: StartTaskOptions): Promise<TaskRecord> {
 }
 
 /**
- * Interrupt a running task. Aborts the runtime; the driver will catch
- * the cancellation and transition to `cancelled`.
+ * Interrupt a running task. Aborts the runtime; the driver catches the
+ * cancellation and transitions to `cancelled`.
  */
 export async function interruptTask(
 	taskId: string,
@@ -164,13 +181,11 @@ export async function interruptTask(
 	if (ctrl) {
 		ctrl.abort(reason ?? 'interrupted');
 	}
-	// The driver's catch-cancellation block will transition status; we don't
-	// double-write here.
 	return task;
 }
 
 /**
- * Continue an interrupted/completed task with new instructions. Re-uses
+ * Continue an interrupted/completed task with new instructions. Reuses
  * the same conversationId so prior history is preserved.
  */
 export async function continueTask(
@@ -188,21 +203,30 @@ export async function continueTask(
 			`Task ${taskId} is currently ${task.status}; interrupt it before continuing.`,
 		);
 	}
-	if (!task.threadId) {
-		throw new Error(`Task ${taskId} has no Discord thread to continue in.`);
+	if (!task.statusChannelId) {
+		throw new Error(`Task ${taskId} has no status message to continue in.`);
 	}
 
-	// Fetch the existing thread.
 	const client = clientRef;
 	if (!client) throw new Error('Discord client not bound');
-	const channel = await client.channels.fetch(task.threadId);
-	if (!channel || !('send' in channel) || !('isThread' in channel)) {
-		throw new Error(`Task ${taskId} thread is no longer accessible.`);
-	}
-	const thread = channel as ThreadChannel;
 
-	// Reset abort controller; status pending → running.
-	// (taskStore.create sets one, but it was consumed by the previous run.)
+	// Fetch the channel the status message lives in.
+	let statusChannel: Sendable;
+	try {
+		const channel = await client.channels.fetch(task.statusChannelId);
+		if (!channel || !('send' in channel) || !('messages' in channel)) {
+			throw new Error('channel not sendable');
+		}
+		statusChannel = channel as Sendable;
+	} catch (err) {
+		throw new Error(
+			`Could not access status channel for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+
+	// Reset abort controller; status → running.
+	// (taskStore.create sets one initially, but it was consumed by the
+	// previous run.)
 	(
 		taskStore as unknown as {
 			runtime: Map<string, {abortController: AbortController}>;
@@ -218,36 +242,37 @@ export async function continueTask(
 
 	const updatedTask = taskStore.get(taskId)!;
 
-	// Reconstruct a TaskThread wrapper around the existing thread + header.
-	const headerMsg = task.headerMessageId
-		? await thread.messages.fetch(task.headerMessageId).catch(() => null)
-		: null;
-	if (!headerMsg) {
-		// Header gone — best effort: post a fresh status line.
-		await thread
-			.send('▶ Continuing task with new instructions…')
-			.catch(() => {});
+	// Reattach a TaskStatusMessage around the existing Discord message.
+	// If the message is gone, reattach() will post a fresh one in the
+	// same channel.
+	const statusMessage = await TaskStatusMessage.reattach(
+		statusChannel,
+		updatedTask,
+		task.statusMessageId ?? '',
+	);
+
+	// If reattach posted a fresh message, pick up the new id.
+	if (statusMessage.getMessageId() !== task.statusMessageId) {
+		await taskStore.update(taskId, {
+			statusMessageId: statusMessage.getMessageId(),
+			statusChannelId: statusMessage.getChannelId(),
+		});
 	}
 
-	const taskThread = TaskThread.reattach(thread, updatedTask, headerMsg);
-
-	await thread
-		.send(`▶ Continuing with new instructions: ${truncate(prompt, 200)}`)
+	// Post a brief "continuing" marker so the turn boundary is visible.
+	await statusChannel
+		.send(
+			`▶ Continuing task \`${taskId}\` with new instructions: ${truncate(prompt, 200)}`,
+		)
 		.catch(() => {});
 
-	void driveTask(
-		taskId,
-		prompt,
-		taskThread,
-		runtime,
-		/* skipUserMessage */ false,
-	).catch(err => {
+	void driveTask(taskId, prompt, statusMessage, runtime, false).catch(err => {
 		console.error(`[task ${taskId}] continuation crashed:`, err);
 		void finalizeTask(
 			taskId,
 			'failed',
 			err instanceof Error ? err.message : String(err),
-			taskThread,
+			statusMessage,
 		);
 	});
 
@@ -256,13 +281,14 @@ export async function continueTask(
 
 /**
  * Drive a single processMessage round for a task. Wires runtime callbacks
- * into the TaskThread, persists the message history, manages activity log,
- * and handles terminal-state notification.
+ * into the status message (tool-count + checklist trigger re-renders),
+ * persists the message history, manages the activity log, and finalises
+ * the status message on completion.
  */
 async function driveTask(
 	taskId: string,
 	prompt: string,
-	taskThread: TaskThread,
+	statusMessage: TaskStatusMessage,
 	runtime: HeadlessRuntime,
 	skipUserMessage = false,
 ): Promise<void> {
@@ -289,11 +315,12 @@ async function driveTask(
 				prompt,
 				'auto-accept', // tasks never block on approval prompts
 				{
-					onToken: (token: string) => {
-						void taskThread.onToken(token);
-					},
-					// Should never be called in auto-accept mode, but if a tool's
-					// needsApproval returns true unconditionally, default to approve.
+					// Tasks do not stream reasoning into Discord any more.
+					// (Tokens still accumulate in the runtime's own buffer so
+					// the final response is returned on completion.)
+					onToken: () => {},
+					// Should never be called in auto-accept mode, but default
+					// to approve just in case.
 					onToolApproval: async () => 'approve',
 					onToolStart: (toolName: string, args: Record<string, unknown>) => {
 						void taskStore.incrementToolCount(taskId);
@@ -302,17 +329,16 @@ async function driveTask(
 							kind: 'tool',
 							summary: summariseTool(toolName, args),
 						});
-						void taskThread.recordToolStart(toolName, args);
-						// Refresh header to bump tool count.
+						// Trigger a status-message re-render so the tool count
+						// and any refreshed checklist are visible.
 						const t = taskStore.get(taskId);
-						if (t) taskThread.updateTask(t);
+						if (t) statusMessage.updateTask(t);
 					},
 					onToolResult: (
 						toolName: string,
 						output: string,
 						isError: boolean,
 					) => {
-						void taskThread.recordToolResult(toolName, output, isError);
 						if (isError) {
 							void taskStore.appendActivity(taskId, {
 								timestampMs: Date.now(),
@@ -338,7 +364,7 @@ async function driveTask(
 			`[task ${taskId}] processMessage returned, toolCalls=${result.toolCallCount} response.length=${result.response?.length ?? 0}`,
 		);
 
-		// Record the assistant's final response and finalize as succeeded.
+		// Record the assistant's final response in the activity log.
 		await taskStore.appendActivity(taskId, {
 			timestampMs: Date.now(),
 			kind: 'assistant',
@@ -348,7 +374,7 @@ async function driveTask(
 			taskId,
 			'succeeded',
 			null,
-			taskThread,
+			statusMessage,
 			result.response || '',
 		);
 	} catch (err) {
@@ -372,7 +398,7 @@ async function driveTask(
 					? signal.reason
 					: 'cancelled'
 				: errMsg,
-			taskThread,
+			statusMessage,
 		);
 	}
 }
@@ -381,7 +407,7 @@ async function finalizeTask(
 	taskId: string,
 	status: 'succeeded' | 'failed' | 'cancelled',
 	error: string | null,
-	taskThread: TaskThread,
+	statusMessage: TaskStatusMessage,
 	lastResponse?: string,
 ): Promise<void> {
 	const updated = await taskStore.update(taskId, {
@@ -391,24 +417,7 @@ async function finalizeTask(
 	});
 	if (!updated) return;
 
-	await taskThread.postTerminalBanner(updated);
-
-	// Notify the parent channel.
-	const client = clientRef;
-	if (!client) return;
-	try {
-		const parent = await client.channels.fetch(updated.parentChannelId);
-		if (parent && 'send' in parent) {
-			const thread = taskThread.getThread();
-			await postParentNotification(
-				parent as TextChannel | ThreadChannel,
-				updated,
-				thread,
-			);
-		}
-	} catch {
-		// Parent channel gone — non-fatal.
-	}
+	await statusMessage.finalize(updated);
 }
 
 function summariseTool(

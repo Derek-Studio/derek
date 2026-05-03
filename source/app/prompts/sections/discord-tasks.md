@@ -23,15 +23,18 @@ Do NOT use a task for:
 
 ### How tasks work
 
-- `task_start` returns **immediately**. The task runs in parallel in its
-  own Discord thread while you keep responding to the user in the main
-  channel.
+- `task_start` returns **immediately** with a task id. The task runs in
+  parallel while you keep responding to the user in the main channel.
+- A single live status message is posted in the channel where you were
+  asked to start the task. That message is **edited in place** as the
+  task progresses — status badge (🟡 → 🟢 → ✅/❌/⏹), elapsed time,
+  tool count, checklist, and (on completion) the final result. There is
+  no separate thread.
 - A task has its own isolated conversation — it does NOT see the main
   channel's history. Put everything it needs into the `prompt` arg.
-- When the task finishes, a notification lands in the main channel. You
-  will see completed-since-last-turn tasks surfaced in the `ACTIVE TASKS`
-  block at the top of your context on your next turn.
-- Acknowledge completed tasks in your reply ("the refactor task finished,
+- You will see tasks that completed since your last turn surfaced in
+  the `ACTIVE TASKS` block at the top of your context on your next
+  turn. Acknowledge them in your reply ("the refactor task finished,
   tests pass") rather than pretending you don't know about them.
 
 ### Managing running tasks
@@ -49,8 +52,8 @@ Do NOT use a task for:
 When you're running as a task (this prompt appears in the task's own
 runtime), you have the normal tool set plus `task_checklist`. Use
 `task_checklist` at the start to lay out your plan, and update it as you
-progress. The checklist is shown live in the task thread header so the
-operator can see progress at a glance.
+progress. The checklist is rendered live in the task's status message so
+the operator can see progress at a glance.
 
 Tasks cannot spawn sub-tasks — task-management tools (other than
 `task_checklist`) are not available inside a task run.

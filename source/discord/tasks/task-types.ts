@@ -2,10 +2,12 @@
  * Tasks: agent-driven background units of work.
  *
  * The main agent decides "this is going to take a while" and calls
- * `task_start`. A Task runs in its own `processMessage` call, posts its
- * full transcript to a Discord thread, and notifies the parent channel
- * when it terminates. The main agent learns about completion via the
- * auto-injected ACTIVE TASKS prompt block on its next real turn.
+ * `task_start`. A Task runs in its own `processMessage` call. Its
+ * entire user-visible surface is a **single live status message** in
+ * the parent channel, edited in place as the task progresses. On
+ * terminal transition the message shows the final status/result/error.
+ * The main agent learns about completion via the auto-injected ACTIVE
+ * TASKS prompt block on its next real turn.
  *
  * Tasks always inherit the parent channel's working directory, run in
  * `auto-accept` mode (no human approval prompts mid-task), and never
@@ -53,8 +55,17 @@ export interface TaskRecord {
 	parentChannelId: string;
 	parentGuildId?: string;
 	parentConversationId: string;
-	/** Discord thread id for the task transcript. Null until status=running. */
-	threadId: string | null;
+	/**
+	 * Channel id where this task's live status message lives. Usually the
+	 * same as parentChannelId, but kept separate for clarity / future
+	 * flexibility (e.g. if we ever let tasks post elsewhere).
+	 */
+	statusChannelId: string | null;
+	/**
+	 * Discord message id of the single live status message. Edited in
+	 * place as the task runs. Null until the task has been posted.
+	 */
+	statusMessageId: string | null;
 	/** This task's own conversation id in messageStore (forked from parent). */
 	conversationId: string;
 	/** Inherited from parent at task creation. Never changes. */
@@ -67,7 +78,6 @@ export interface TaskRecord {
 	startedAt: number;
 	endedAt: number | null;
 	error: string | null;
-	headerMessageId: string | null;
 	/**
 	 * Set when the main agent has been shown this task in its ACTIVE TASKS
 	 * prompt block in a terminal state. Used so a finished task only

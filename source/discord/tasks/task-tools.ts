@@ -22,14 +22,14 @@ interface TaskStartArgs {
 
 const taskStartCoreTool = tool({
 	description:
-		'Start a long-running background task. Use for anything you estimate will take >30s or more than a few tool calls — refactors, multi-file edits, repo-wide searches, builds, test runs. Returns a task id and thread URL immediately; the task runs in parallel while you keep chatting with the user. Use this INSTEAD OF doing long work inline, so the user can keep asking questions.',
+		'Start a long-running background task. Use for anything you estimate will take >30s or more than a few tool calls — refactors, multi-file edits, repo-wide searches, builds, test runs. Posts a single live status message in this channel that edits in place as the task progresses (status, elapsed time, tool count, checklist, final result). Returns immediately; the task runs in parallel while you keep chatting with the user. Use this INSTEAD OF doing long work inline, so the user can keep asking questions.',
 	inputSchema: jsonSchema<TaskStartArgs>({
 		type: 'object',
 		properties: {
 			title: {
 				type: 'string',
 				description:
-					'Short human-readable title for the task thread (e.g. "Refactor auth handlers"). Shown in Discord thread name and status ping. Keep under 80 chars.',
+					'Short human-readable title shown in the status message (e.g. "Refactor auth handlers"). Keep under 80 chars.',
 			},
 			prompt: {
 				type: 'string',
@@ -58,12 +58,13 @@ const taskStartCoreTool = tool({
 				prompt: args.prompt,
 			});
 			console.log(
-				`[task_start] task=${task.id} status=${task.status} threadId=${task.threadId}`,
+				`[task_start] task=${task.id} status=${task.status} statusMessageId=${task.statusMessageId}`,
 			);
-			const threadUrl = task.threadId
-				? `https://discord.com/channels/${ctx.parentGuildId ?? '@me'}/${task.threadId}`
-				: '(no thread)';
-			return `Started task \`${task.id}\` "${task.title}". Thread: ${threadUrl}\nThe task is now running in the background. It will post a notification in this channel when it completes.`;
+			const statusUrl =
+				task.statusChannelId && task.statusMessageId
+					? `https://discord.com/channels/${ctx.parentGuildId ?? '@me'}/${task.statusChannelId}/${task.statusMessageId}`
+					: '(no status message)';
+			return `Started task \`${task.id}\` "${task.title}". Status: ${statusUrl}\nThe task is now running in the background. Its status message in this channel will update as it progresses, and the final result will be edited into that same message when it completes.`;
 		} catch (err) {
 			console.error('[task_start] startTask threw:', err);
 			return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -133,7 +134,7 @@ interface TaskInterruptArgs {
 
 const taskInterruptCoreTool = tool({
 	description:
-		'Cancel a running background task. The task transitions to `cancelled`, its thread gets a banner explaining the cancellation, and the parent channel is notified. Use this when the user asks you to stop a running task, or when you want to interrupt one so you can start it again with different instructions (pair with task_continue).',
+		'Cancel a running background task. The task transitions to `cancelled` and its live status message reflects the new state. Use this when the user asks you to stop a running task, or when you want to interrupt one so you can start it again with different instructions (pair with task_continue).',
 	inputSchema: jsonSchema<TaskInterruptArgs>({
 		type: 'object',
 		properties: {
@@ -144,7 +145,7 @@ const taskInterruptCoreTool = tool({
 			reason: {
 				type: 'string',
 				description:
-					'Optional short explanation of why the task is being interrupted (shown in the cancellation banner).',
+					'Optional short explanation of why the task is being interrupted (shown on the status message).',
 			},
 		},
 		required: ['taskId'],
@@ -175,7 +176,7 @@ interface TaskContinueArgs {
 
 const taskContinueCoreTool = tool({
 	description:
-		"Resume a completed or cancelled task with new instructions. The task's full message history is preserved — this is how you steer a task that stopped short, correct a mistake, or add a follow-up. Runs in the same Discord thread.",
+		"Resume a completed or cancelled task with new instructions. The task's full message history is preserved — this is how you steer a task that stopped short, correct a mistake, or add a follow-up. Updates the same live status message.",
 	inputSchema: jsonSchema<TaskContinueArgs>({
 		type: 'object',
 		properties: {
@@ -195,7 +196,7 @@ const taskContinueCoreTool = tool({
 	execute: async (args: TaskContinueArgs): Promise<string> => {
 		try {
 			const task = await continueTask(args.taskId, args.prompt);
-			return `Continuing task ${task.id} "${task.title}". See its thread for live progress; a notification will be posted here when it finishes.`;
+			return `Continuing task ${task.id} "${task.title}". Its status message in this channel will update as it progresses; the final result will appear there when it finishes.`;
 		} catch (err) {
 			return `Error: ${err instanceof Error ? err.message : String(err)}`;
 		}
@@ -266,7 +267,7 @@ interface TaskChecklistArgs {
 
 const taskChecklistCoreTool = tool({
 	description:
-		"Update the checklist shown in this task's Discord thread header. Call this at the start of the task to lay out the plan, then again each time you finish or start a step. States: 'pending' (not started), 'doing' (in progress), 'done' (finished), 'skipped' (decided not to do). Replaces the entire checklist each call — pass the full updated list every time.",
+		"Update the checklist shown in this task's live status message. Call this at the start of the task to lay out the plan, then again each time you finish or start a step. States: 'pending' (not started), 'doing' (in progress), 'done' (finished), 'skipped' (decided not to do). Replaces the entire checklist each call — pass the full updated list every time.",
 	inputSchema: jsonSchema<TaskChecklistArgs>({
 		type: 'object',
 		properties: {
