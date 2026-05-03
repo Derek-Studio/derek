@@ -90,10 +90,14 @@ function getChannelState(channelId: string): ChannelRunState {
 
 /**
  * Resolve the working directory for a new session in a channel.
+ * Checks channelProjectMapping first, then falls back to config.workingDirectory.
  * For existing sessions, session.workingDirectory takes priority — see processUserMessage.
  */
-function defaultWorkingDirectory(config: DiscordConfig): string {
-	return config.workingDirectory;
+function defaultWorkingDirectory(
+	config: DiscordConfig,
+	channelId: string,
+): string {
+	return config.channelProjectMapping[channelId] ?? config.workingDirectory;
 }
 
 const MISSED_MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // ignore messages older than 24h
@@ -456,7 +460,7 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 		session = await discordSessionStore.createSession({
 			channelId,
 			guildId,
-			workingDirectory: defaultWorkingDirectory(config),
+			workingDirectory: defaultWorkingDirectory(config, channelId),
 		});
 	}
 	await discordSessionStore.touchSession(conversationId);
@@ -896,7 +900,7 @@ async function handleProjectCreate(
 	const projectDir = path.join('/root/projects', name);
 	if (fs.existsSync(projectDir)) {
 		await interaction.reply({
-			content: `❌ Directory already exists: \`${projectDir}\`\nUse \`/new cwd:${projectDir}\` to link this channel to it instead.`,
+			content: `❌ Directory already exists: \`${projectDir}\`\nUse \`/cwd ${projectDir}\` to switch to it instead.`,
 			ephemeral: true,
 		});
 		return;
@@ -1048,31 +1052,53 @@ async function handleSlashCommand(
 	const conversationId = DiscordSessionStore.conversationId(channelId, guildId);
 
 	switch (interaction.commandName) {
-		case 'new': {
-			const cwd =
-				interaction.options.getString('cwd') ?? config.workingDirectory;
-			const model = interaction.options.getString('model') ?? undefined;
-			const provider = interaction.options.getString('provider') ?? undefined;
+		case 'cwd': {
+			const newPath = interaction.options.getString('path') ?? null;
+			const session = discordSessionStore.getSession(conversationId);
+			const currentCwd =
+				session?.workingDirectory ?? defaultWorkingDirectory(config, channelId);
 
-			// Delete existing session
-			await discordSessionStore.deleteSession(conversationId);
-			await messageStore.clearMessages(conversationId);
-
-			// Create fresh session
-			await discordSessionStore.createSession({
-				channelId,
-				guildId,
-				workingDirectory: cwd,
-				model,
-				provider,
-			});
-
-			// Switch model/provider in runtime if specified
-			if (model) runtime.setModel(model);
-
-			await interaction.reply(
-				`✅ New session created.\n📁 \`${cwd}\`${model ? `\n🤖 ${model}` : ''}`,
-			);
+			if (!newPath) {
+				// Show current cwd and which hydration files exist
+				const hydrationFiles = ['AGENTS.md', 'VISION.md', 'TODO.md'].map(
+					name => {
+						const exists = fs.existsSync(path.join(currentCwd, name));
+						return `${exists ? '✅' : '❌'} \`${name}\``;
+					},
+				);
+				await interaction.reply(
+					`📁 \`${currentCwd}\`\n\n**Prompt hydration files:**\n${hydrationFiles.join('\n')}`,
+				);
+			} else {
+				// Update session cwd in-place, no history clear
+				if (!fs.existsSync(newPath)) {
+					await interaction.reply({
+						content: `❌ Directory not found: \`${newPath}\``,
+						ephemeral: true,
+					});
+					break;
+				}
+				if (session) {
+					await discordSessionStore.updateSession(conversationId, {
+						workingDirectory: newPath,
+					});
+				} else {
+					await discordSessionStore.createSession({
+						channelId,
+						guildId,
+						workingDirectory: newPath,
+					});
+				}
+				const hydrationFiles = ['AGENTS.md', 'VISION.md', 'TODO.md'].map(
+					name => {
+						const exists = fs.existsSync(path.join(newPath, name));
+						return `${exists ? '✅' : '❌'} \`${name}\``;
+					},
+				);
+				await interaction.reply(
+					`📁 Working directory updated to \`${newPath}\`\n\n**Prompt hydration files:**\n${hydrationFiles.join('\n')}`,
+				);
+			}
 			break;
 		}
 

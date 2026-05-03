@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Derek Dev Workflow
+
+There are two running instances: **derek** (production, `/root/projects/derek`) and **derek-dev** (dev, `/root/projects/derek-dev`). Changes are developed and tested in derek-dev, then merged into derek. Both codebases should stay identical except for in-flight changes — when merging, copy changed source files across and run `pnpm run deploy` in the production folder. The shared channel config lives at `/root/.config/derek/channels.json`.
+
+**After making any code change, run `pnpm run deploy` from the project root.** This compiles TypeScript and restarts the running bot — changes have no effect until this is done. Test via `#derek-dev-test` in Discord (Derek Dev bot, sandbox cwd). When happy, copy changed files to `/root/projects/derek/` and run `pnpm run deploy` there too.
+
 ## Development Commands
 
 ```bash

@@ -9,21 +9,14 @@ import type {DiscordConfig} from '../types.js';
 export function getCommandDefinitions(): RESTPostAPIChatInputApplicationCommandsJSONBody[] {
 	return [
 		new SlashCommandBuilder()
-			.setName('new')
-			.setDescription('Start a fresh session in this channel')
+			.setName('cwd')
+			.setDescription('Show or change the working directory for this session')
 			.addStringOption(opt =>
 				opt
-					.setName('cwd')
-					.setDescription('Working directory for this session')
-					.setRequired(false),
-			)
-			.addStringOption(opt =>
-				opt.setName('model').setDescription('Model to use').setRequired(false),
-			)
-			.addStringOption(opt =>
-				opt
-					.setName('provider')
-					.setDescription('Provider to use')
+					.setName('path')
+					.setDescription(
+						'New working directory path (omit to just show current)',
+					)
 					.setRequired(false),
 			)
 			.toJSON(),
