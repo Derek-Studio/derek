@@ -6,6 +6,7 @@
  */
 
 import {execSync, spawn} from 'node:child_process';
+import {getToolCwd} from '@/discord/tasks/tool-cwd-context';
 import {getLogger} from '@/utils/logging';
 
 const logger = getLogger();
@@ -118,7 +119,7 @@ export function isGhAvailable(): boolean {
  */
 export async function execGit(args: string[]): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const proc = spawn('git', args);
+		const proc = spawn('git', args, {cwd: getToolCwd()});
 		let stdout = '';
 		let stderr = '';
 
@@ -151,7 +152,7 @@ export async function execGit(args: string[]): Promise<string> {
  */
 export async function execGh(args: string[]): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const proc = spawn('gh', args);
+		const proc = spawn('gh', args, {cwd: getToolCwd()});
 		let stdout = '';
 		let stderr = '';
 

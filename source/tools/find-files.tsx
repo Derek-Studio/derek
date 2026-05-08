@@ -9,6 +9,7 @@ import {
 	DEFAULT_FIND_FILES_RESULTS,
 	MAX_FIND_FILES_RESULTS,
 } from '@/constants';
+import {getToolCwd} from '@/discord/tasks/tool-cwd-context';
 import {ThemeContext} from '@/hooks/useTheme';
 import type {NanocoderToolExport} from '@/types/core';
 import {jsonSchema, tool} from '@/types/core';
@@ -131,7 +132,7 @@ interface FindFilesArgs {
 }
 
 const executeFindFiles = async (args: FindFilesArgs): Promise<string> => {
-	const cwd = process.cwd();
+	const cwd = getToolCwd();
 	const maxResults = Math.min(
 		args.maxResults || DEFAULT_FIND_FILES_RESULTS,
 		MAX_FIND_FILES_RESULTS,

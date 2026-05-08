@@ -101,6 +101,8 @@ export class TaskStore extends EventEmitter<StoreEvents> {
 		parentConversationId: string;
 		conversationId: string;
 		workingDirectory: string;
+		worktreePath: string;
+		branch: string;
 		title: string;
 		initialPrompt: string;
 	}): TaskRecord {
@@ -115,6 +117,8 @@ export class TaskStore extends EventEmitter<StoreEvents> {
 			statusMessageId: null,
 			conversationId: opts.conversationId,
 			workingDirectory: opts.workingDirectory,
+			worktreePath: opts.worktreePath,
+			branch: opts.branch,
 			title: opts.title,
 			initialPrompt: opts.initialPrompt,
 			status: 'pending',

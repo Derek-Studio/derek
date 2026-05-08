@@ -11,6 +11,7 @@ import {
 	DEFAULT_SEARCH_RESULTS,
 	MAX_SEARCH_RESULTS,
 } from '@/constants';
+import {getToolCwd} from '@/discord/tasks/tool-cwd-context';
 import {ThemeContext} from '@/hooks/useTheme';
 import type {NanocoderToolExport} from '@/types/core';
 import {jsonSchema, tool} from '@/types/core';
@@ -252,7 +253,7 @@ const executeSearchFileContents = async (
 		return 'Error: Search query cannot be empty';
 	}
 
-	const cwd = process.cwd();
+	const cwd = getToolCwd();
 	const maxResults = Math.min(
 		args.maxResults || DEFAULT_SEARCH_RESULTS,
 		MAX_SEARCH_RESULTS,

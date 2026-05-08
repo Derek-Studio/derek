@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type {
 	Client,
 	Message as DiscordJsMessage,
@@ -19,6 +20,19 @@ import {
 	MAX_CONCURRENT_TASKS_PER_CHANNEL,
 	type TaskRecord,
 } from './task-types.js';
+import {
+	createWorktreeForTask,
+	findRepoRoot,
+	removeWorktreeForTask,
+} from './worktree-manager.js';
+
+/**
+ * Base branch new task worktrees are cut from. Hardcoded for v1 — the
+ * design doc defers per-project / per-AGENTS.md configuration to a
+ * follow-up. Every self-modifying project in this environment uses
+ * `dev` as its working branch, so this is the right default.
+ */
+const TASK_BASE_BRANCH = 'dev';
 
 type Sendable = TextChannel | ThreadChannel;
 
@@ -31,6 +45,7 @@ type Sendable = TextChannel | ThreadChannel;
 export const TASK_MANAGEMENT_TOOL_NAMES = [
 	'task_start',
 	'task_status',
+	'task_output',
 	'task_interrupt',
 	'task_continue',
 	'task_wait',
@@ -119,19 +134,53 @@ export async function startTask(opts: StartTaskOptions): Promise<TaskRecord> {
 	}
 	const statusChannel = triggerChannel as Sendable;
 
-	// Create the task record (pending).
+	// Create a git worktree so the task's edits are isolated from the
+	// running bot's checkout and from every other concurrent task. If
+	// this fails (not a git repo / dirty worktree / disk full / …) we
+	// still create a record so the failure is visible in the channel,
+	// post the status message once, and stop — no runtime drive.
+	let worktreePath: string;
+	let branch: string;
+	let worktreeError: string | null = null;
+	try {
+		const repoRoot = await findRepoRoot(parentSession.workingDirectory);
+		const result = await createWorktreeForTask(
+			// A fresh id isn't available yet — taskStore.create generates
+			// one. Use a short nonce here as the worktree directory
+			// name; the record's own id stays authoritative for status
+			// lookups. Good enough for v1 (no cleanup code depends on
+			// id/worktree alignment).
+			freshWorktreeId(),
+			repoRoot,
+			TASK_BASE_BRANCH,
+		);
+		worktreePath = result.worktreePath;
+		branch = result.branch;
+	} catch (err) {
+		worktreeError = err instanceof Error ? err.message : String(err);
+		// Placeholder paths so the record is still well-formed. The task
+		// will never be driven, so these are never read as cwd.
+		worktreePath = parentSession.workingDirectory;
+		branch = '';
+	}
+
+	// Create the task record (pending → failed below if worktree setup
+	// failed; → running if it succeeded).
 	const task = taskStore.create({
 		parentChannelId: opts.parentChannelId,
 		parentGuildId: opts.parentGuildId,
 		parentConversationId,
 		// Synthetic conversationId for the task's own message history.
 		conversationId: `task:${parentConversationId}:${Date.now()}`,
-		workingDirectory: parentSession.workingDirectory,
+		workingDirectory: worktreePath,
+		worktreePath,
+		branch,
 		title: opts.title,
 		initialPrompt: opts.prompt,
 	});
 
-	// Post the live status message.
+	// Post the live status message. We always post once so the operator
+	// sees the task — even if worktree creation failed below.
 	const statusMessage = await TaskStatusMessage.create(statusChannel, task);
 	if (!statusMessage) {
 		await taskStore.update(task.id, {
@@ -141,6 +190,19 @@ export async function startTask(opts: StartTaskOptions): Promise<TaskRecord> {
 		throw new Error('Failed to post status message for task');
 	}
 
+	// If worktree creation failed, transition straight to failed and
+	// don't drive the runtime.
+	if (worktreeError !== null) {
+		await taskStore.update(task.id, {
+			statusChannelId: statusMessage.getChannelId(),
+			statusMessageId: statusMessage.getMessageId(),
+			status: 'failed',
+			error: `Could not create task worktree: ${worktreeError}`,
+		});
+		await statusMessage.finalize(taskStore.get(task.id)!);
+		return taskStore.get(task.id) ?? task;
+	}
+
 	await taskStore.update(task.id, {
 		statusChannelId: statusMessage.getChannelId(),
 		statusMessageId: statusMessage.getMessageId(),
@@ -148,7 +210,7 @@ export async function startTask(opts: StartTaskOptions): Promise<TaskRecord> {
 	});
 	statusMessage.updateTask(taskStore.get(task.id)!);
 	console.log(
-		`[task ${task.id}] transitioned to running, status message ${statusMessage.getMessageId()} posted in channel ${statusMessage.getChannelId()}`,
+		`[task ${task.id}] transitioned to running, worktree=${worktreePath} branch=${branch}, status message ${statusMessage.getMessageId()} posted in channel ${statusMessage.getChannelId()}`,
 	);
 
 	// Fire-and-forget: drive the runtime in the background.
@@ -163,6 +225,19 @@ export async function startTask(opts: StartTaskOptions): Promise<TaskRecord> {
 	});
 
 	return taskStore.get(task.id) ?? task;
+}
+
+/**
+ * Mint a short id used as a worktree directory name. We don't reuse
+ * taskStore.create's id here because the record id is generated inside
+ * that call and we need the worktree path *before* the record exists.
+ * Using a distinct nonce is fine: no code cross-references worktree
+ * path against record id.
+ */
+function freshWorktreeId(): string {
+	// 8 hex chars. Randomness from Math.random is fine — this is a
+	// scratch directory name, not a security-sensitive identifier.
+	return Math.random().toString(16).slice(2, 10);
 }
 
 /**
@@ -359,6 +434,11 @@ async function driveTask(
 					// finalisation-nudge guards in the runtime prevent
 					// runaway loops regardless.
 					maxTurns: 250,
+					// Run all tools — file edits, bash, git — against this
+					// task's own git worktree, isolating its edits from
+					// the running bot's checkout and from every other
+					// concurrent task.
+					cwd: task.workingDirectory,
 				},
 			),
 		);
@@ -424,6 +504,26 @@ async function finalizeTask(
 	if (!updated) return;
 
 	await statusMessage.finalize(updated);
+
+	if (updated.worktreePath && updated.branch) {
+		void cleanupWorktree(updated).catch(err => {
+			console.warn(
+				`[task ${taskId}] worktree cleanup failed (non-fatal):`,
+				err instanceof Error ? err.message : String(err),
+			);
+		});
+	}
+}
+
+async function cleanupWorktree(task: TaskRecord): Promise<void> {
+	// task.worktreePath is /tmp/derek-tasks/<nonce> where the nonce came from
+	// freshWorktreeId() — distinct from task.id. Recover it via basename.
+	const worktreeNonce = path.basename(task.worktreePath);
+	const repoRoot = await findRepoRoot(task.worktreePath);
+	console.log(
+		`[task ${task.id}] removing worktree ${task.worktreePath} and branch ${task.branch}`,
+	);
+	await removeWorktreeForTask(worktreeNonce, repoRoot);
 }
 
 function summariseTool(

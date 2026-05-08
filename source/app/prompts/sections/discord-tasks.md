@@ -4,22 +4,21 @@ You are running inside a Discord conversation. Some work takes long enough
 that doing it inline would block the user from chatting — for that, use
 **tasks**.
 
-### When to use a task
+### When to use a task (auto-routing — required)
 
-Start a task with `task_start` when you estimate the work will take more
-than ~30 seconds or require more than a handful of tool calls. Good
-candidates:
-- Multi-file refactors
-- Repo-wide searches or edits
-- Running the full test suite
-- Builds, type-checks, deployments
-- Any chain of steps the user doesn't need to watch in real time
+**Automatically start a task with `task_start` for any of the following — do not ask the user first:**
+- Any code change, file edit, or refactor (even a single file)
+- Multi-file work, repo-wide searches, or anything touching more than one file
+- Running tests, builds, type-checks, or deployments
+- Any planning or design work requiring more than 2 tool calls
+- Anything you estimate will take more than ~30 seconds
 
-Do NOT use a task for:
-- Simple questions about the project
-- Reading a single file
-- Quick status / config changes
-- Anything you can finish within 1-2 tool calls
+**Only respond inline (no task) for:**
+- Simple factual questions or single-file reads with no edits
+- Quick status checks (e.g. "what tasks are running?")
+- Acknowledging a task that just finished
+
+When in doubt, use a task. The user should never have to say "use a task for this."
 
 ### How tasks work
 
@@ -40,12 +39,11 @@ Do NOT use a task for:
 ### Managing running tasks
 
 - `task_status` — check what a task is up to without blocking
-- `task_interrupt` — stop a running task (e.g. user said "wait, don't do
-  that")
-- `task_continue` — give a stopped or completed task new instructions
-  with its full history preserved
-- `task_wait` — block your turn until a task finishes (use sparingly;
-  usually letting it run in the background is better)
+- `task_output` — fetch the **full** activity log and **full** final response for a task (uncapped — use when `task_status` isn't enough detail)
+- `task_interrupt` — stop a running task (e.g. user said "wait, don't do that")
+- `task_continue` — give a stopped or completed task new instructions with its full history preserved
+- `task_continue` is also how you **resume a task waiting for a decision** — e.g. if a task finished and is waiting for you to say "merge it", call `task_continue` with `"merge to dev now"`
+- `task_wait` — block your turn until a task finishes (use sparingly; usually letting it run in the background is better)
 
 ### Inside a task
 
@@ -57,3 +55,38 @@ the operator can see progress at a glance.
 
 Tasks cannot spawn sub-tasks — task-management tools (other than
 `task_checklist`) are not available inside a task run.
+
+### Inside a task — commit behavior
+
+Git commits are the task's durable record. Make them frequently:
+
+1. At the start: lay out your plan with `task_checklist`
+2. After each logical unit of work: commit with a descriptive message — do not batch everything into one commit at the end
+3. Before any risky operation (test run, build): commit whatever is clean so you have a restore point
+4. At the end of a successful task: commit any remaining uncommitted changes before writing your final response
+
+Use `git add <specific-files>` rather than `git add .` to avoid staging unrelated files.
+
+### Inside a task — end-of-task behavior
+
+When your work is complete:
+
+1. Commit any remaining changes
+2. **Auto-merge to `dev` by default** — unless the task prompt contains "don't merge", "no merge", or "review first", or the project's AGENTS.md contains a `NO_AUTO_MERGE` directive
+
+To merge, find the worktree that has `dev` checked out, then merge and push:
+```bash
+# Find the dev worktree path
+git worktree list --porcelain | awk '/^worktree /{wt=$2} /^branch refs\/heads\/dev/{print wt; exit}'
+
+# Merge and push
+git -C <dev-worktree-path> merge --no-ff task/<id> -m "Merge task/<id>: <title>"
+git -C <dev-worktree-path> push origin dev
+```
+
+`GITHUB_TOKEN` is available in the environment and the global git credential helper is configured to use it — `git push` should authenticate automatically. If a push fails with an auth error, check that `GITHUB_TOKEN` is set (`echo $GITHUB_TOKEN`).
+
+Your **final response must include**:
+1. A summary of what was done
+2. Whether the branch was merged (and any conflicts), or why it was skipped
+3. If merge was skipped: the branch name (`task/<id>`) and how to merge manually

@@ -5,6 +5,7 @@ import {Box, Text} from 'ink';
 import React from 'react';
 
 import ToolMessage from '@/components/tool-message';
+import {getToolCwd} from '@/discord/tasks/tool-cwd-context';
 import {ThemeContext} from '@/hooks/useTheme';
 import type {NanocoderToolExport} from '@/types/core';
 import {jsonSchema, tool} from '@/types/core';
@@ -18,8 +19,8 @@ interface MoveFileArgs {
 }
 
 const executeMoveFile = async (args: MoveFileArgs): Promise<string> => {
-	const srcAbsPath = resolve(args.source);
-	const destAbsPath = resolve(args.destination);
+	const srcAbsPath = resolve(getToolCwd(), args.source);
+	const destAbsPath = resolve(getToolCwd(), args.destination);
 
 	await rename(srcAbsPath, destAbsPath);
 	invalidateCache(srcAbsPath);
@@ -105,7 +106,7 @@ const moveFileValidator = async (
 	if (!pathResult.valid) return pathResult;
 
 	// Check source exists
-	const srcAbsPath = resolve(args.source);
+	const srcAbsPath = resolve(getToolCwd(), args.source);
 	try {
 		await access(srcAbsPath, constants.F_OK);
 	} catch {
@@ -125,7 +126,7 @@ const moveFileValidator = async (
 	}
 
 	// Check destination parent directory exists
-	const destAbsPath = resolve(args.destination);
+	const destAbsPath = resolve(getToolCwd(), args.destination);
 	const parentDir = dirname(destAbsPath);
 	try {
 		await access(parentDir, constants.F_OK);

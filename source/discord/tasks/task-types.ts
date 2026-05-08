@@ -68,8 +68,21 @@ export interface TaskRecord {
 	statusMessageId: string | null;
 	/** This task's own conversation id in messageStore (forked from parent). */
 	conversationId: string;
-	/** Inherited from parent at task creation. Never changes. */
+	/**
+	 * Absolute path the task runs in — set at creation to the task's own
+	 * git worktree and never changed. Tool invocations (reads, edits,
+	 * bash, git) resolve against this path via AsyncLocalStorage, so
+	 * parallel tasks can't stomp on each other.
+	 */
 	workingDirectory: string;
+	/**
+	 * Absolute path to the task's git worktree. Equal to
+	 * `workingDirectory` — kept as a distinct field so future cleanup
+	 * code can find the worktree without relying on that equality.
+	 */
+	worktreePath: string;
+	/** Branch the worktree is on, e.g. `task/<id>`. */
+	branch: string;
 	title: string;
 	initialPrompt: string;
 	status: TaskStatus;

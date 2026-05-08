@@ -19,6 +19,7 @@ import {buildSystemPrompt} from '@/utils/prompt-builder';
 import {parseToolArguments} from '@/utils/tool-args-parser';
 import {getCurrentTaskId} from '../tasks/task-invocation-context.js';
 import {taskStore} from '../tasks/task-store.js';
+import {withToolCwd} from '../tasks/tool-cwd-context.js';
 import type {DiscordDevelopmentMode} from '../types.js';
 
 /**
@@ -72,6 +73,14 @@ export interface ProcessMessageOptions {
 	 * per file edited.
 	 */
 	maxTurns?: number;
+	/**
+	 * Working directory to resolve tool paths and subprocess spawns
+	 * against for this call. Propagated via AsyncLocalStorage so every
+	 * path-resolving tool and every subprocess sees it without
+	 * threading it through every signature. Defaults to `process.cwd()`
+	 * when omitted (CLI / tests / any non-Discord caller).
+	 */
+	cwd?: string;
 }
 
 /**
@@ -198,6 +207,35 @@ export class HeadlessRuntime {
 	 * the model responds with just text.
 	 */
 	async processMessage(
+		messages: Message[],
+		userContent: string,
+		mode: DiscordDevelopmentMode,
+		callbacks: RuntimeCallbacks,
+		signal?: AbortSignal,
+		imageParts?: import('@/types/core').MessageImagePart[],
+		options?: ProcessMessageOptions,
+	): Promise<ProcessMessageResult> {
+		if (!this.client || !this.toolManager) {
+			throw new Error('Runtime not initialized. Call initialize() first.');
+		}
+
+		// Establish the per-call tool cwd. Every tool invocation inside
+		// this conversation loop — and every subprocess those tools spawn
+		// — will resolve against this directory via AsyncLocalStorage.
+		return await withToolCwd(options?.cwd ?? process.cwd(), () =>
+			this.processMessageInner(
+				messages,
+				userContent,
+				mode,
+				callbacks,
+				signal,
+				imageParts,
+				options,
+			),
+		);
+	}
+
+	private async processMessageInner(
 		messages: Message[],
 		userContent: string,
 		mode: DiscordDevelopmentMode,

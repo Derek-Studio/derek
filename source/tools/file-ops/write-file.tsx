@@ -7,6 +7,7 @@ import React from 'react';
 
 import ToolMessage from '@/components/tool-message';
 import {DEFAULT_TERMINAL_COLUMNS} from '@/constants';
+import {getToolCwd} from '@/discord/tasks/tool-cwd-context';
 import {ThemeContext} from '@/hooks/useTheme';
 import type {NanocoderToolExport} from '@/types/core';
 import {jsonSchema, tool} from '@/types/core';
@@ -28,7 +29,7 @@ const executeWriteFile = async (args: {
 	path: string;
 	content: unknown; // Note: change type to unknown to accept non-string
 }): Promise<string> => {
-	const absPath = resolve(args.path);
+	const absPath = resolve(getToolCwd(), args.path);
 	const fileExists = existsSync(absPath);
 
 	// Type guard: ensure content is string for write operation
@@ -180,7 +181,7 @@ const writeFileFormatter = async (
 	result?: string,
 ): Promise<React.ReactElement> => {
 	const path = args.path || args.file_path || '';
-	const absPath = resolve(path);
+	const absPath = resolve(getToolCwd(), path);
 
 	// Send diff to VS Code during preview phase (before execution)
 	if (result === undefined && isVSCodeConnected()) {
@@ -229,7 +230,7 @@ const writeFileValidator = async (args: {
 	const pathResult = validatePath(args.path);
 	if (!pathResult.valid) return pathResult;
 
-	const absPath = resolve(args.path);
+	const absPath = resolve(getToolCwd(), args.path);
 
 	// Check if parent directory exists
 	const parentDir = dirname(absPath);

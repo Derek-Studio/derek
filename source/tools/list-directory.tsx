@@ -4,6 +4,7 @@ import {Box, Text} from 'ink';
 import React from 'react';
 
 import ToolMessage from '@/components/tool-message';
+import {getToolCwd} from '@/discord/tasks/tool-cwd-context';
 import {ThemeContext} from '@/hooks/useTheme';
 import type {NanocoderToolExport} from '@/types/core';
 import {jsonSchema, tool} from '@/types/core';
@@ -42,7 +43,7 @@ const executeListDirectory = async (
 		);
 	}
 
-	const cwd = process.cwd();
+	const cwd = getToolCwd();
 	const resolvedPath = resolveFilePath(dirPath, cwd);
 	const ig = loadGitignore(cwd);
 

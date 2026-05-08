@@ -1,4 +1,4 @@
-# AGENT.md — Derek
+# AGENTS.md — Derek
 
 AI context for the **Derek** project. Loaded at runtime by Derek and by Claude Code (via `CLAUDE.md`).
 
@@ -21,7 +21,7 @@ The repo runs as **two simultaneous instances** via git worktrees:
 | Worktree | Path | Branch | Service | Discord channel |
 |---|---|---|---|---|
 | Production | `/root/projects/derek` | `dev` | `derek-discord` | `#derek` |
-| Dev/staging | `/root/projects/derek-dev` | `feat/task-worktrees-v2` | `derek-dev-discord` | `#derek-dev-test` |
+| Dev/staging | `/root/projects/derek-dev` | feature branch | `derek-dev-discord` | `#derek-test` |
 
 Both worktrees share one git repo (`git worktree list` to verify). Never manually copy files between them — use git to merge branches.
 
@@ -51,29 +51,31 @@ pnpm run deploy
 
 When modifying this codebase:
 
-1. **Create a branch first** — never edit `dev` or `main` directly:
+1. **Work in the dev worktree** (`/root/projects/derek-dev`) on a feature branch — never edit `dev` directly.
+
+2. **Create a branch first:**
    ```bash
    git checkout -b self-mod/YYYY-MM-DD-description
    ```
 
-2. **Type-check after each file edit** (fast feedback):
+3. **Type-check after each file edit** (fast feedback):
    ```bash
    pnpm run test:types
    ```
 
-3. **Run the full suite before deploying:**
+4. **Run the full suite before deploying:**
    ```bash
    pnpm run test:all      # format, types, lint, AVA tests, knip, audit
    ```
 
-4. **Deploy with safe deploy** — auto-rollback protects against crashes:
+5. **Deploy to the dev bot** — auto-rollback protects against crashes:
    ```bash
    pnpm run deploy
    ```
 
-5. **Never self-merge to `dev` or `main`** — leave that for the human operator.
+6. **Test via `#derek-test`** in Discord.
 
-6. **Test in the dev worktree first** for risky or behavioural changes. If the dev bot breaks, production is unaffected.
+7. **Discord tasks auto-merge** their branch to `dev` on success. For manual work, notify the user with the branch name — they will merge and run `pnpm run deploy` in `/root/projects/derek` to promote to production.
 
 ---
 
@@ -109,6 +111,7 @@ pnpm run build:vscode       # Build to assets/derek-vscode.vsix
 source/
   app/               # App entry, state, prompts, system prompt sections
   discord/           # Discord bot: gateway, tasks, session, UI
+    tasks/           # Task system — worktree-manager.ts, tool-cwd-context.ts
   tools/             # Built-in tools (file ops, bash, search, git, web)
   commands/          # CLI slash commands (/model, /clear, etc.)
   custom-commands/   # User-defined markdown commands
@@ -120,7 +123,7 @@ source/
 scripts/
   safe-deploy.sh     # Build + restart with auto-rollback
   test.sh            # Full test suite runner
-source/app/prompts/sections/   # System prompt markdown sections (22 files)
+source/app/prompts/sections/   # System prompt markdown sections
 ```
 
 ---
@@ -130,7 +133,7 @@ source/app/prompts/sections/   # System prompt markdown sections (22 files)
 **Entry points:**
 - `source/cli.tsx` → CLI (React/Ink render of `source/app.tsx`)
 - `source/discord/bot.ts` → Discord bot initialisation
-- `source/discord/gateway.ts` → Message routing, session management (32KB, core logic)
+- `source/discord/gateway.ts` → Message routing, session management (core logic)
 
 **Application flow:**
 1. Directory trust check (`useDirectoryTrust`) — first-run disclaimer for new directories
@@ -150,9 +153,9 @@ File editing uses a content-based approach: `string_replace` (primary, replaces 
 
 **Command system:** Slash commands in `source/commands/`, lazy-loaded via `source/commands/lazy-registry.ts`. To add a command: create a file exporting a `Command` object, add an entry to `lazyCommands`. Commands that need app state are intercepted in `source/app/utils/app-util.ts`.
 
-**System prompt:** Assembled in `source/utils/prompt-builder.ts` from 22 markdown section files in `source/app/prompts/sections/`. Project context files (`AGENT.md`, `AGENTS.md`, `CLAUDE.md`, `VISION.md`, `TODO.md`) are appended from the current working directory.
+**System prompt:** Assembled in `source/utils/prompt-builder.ts` from markdown section files in `source/app/prompts/sections/`. Project context files (`AGENTS.md`, `VISION.md`, `TODO.md`) are appended from the current working directory.
 
-**Discord tasks:** Long-running work runs as background tasks with isolated context and a live status message in Discord. See `source/discord/tasks/`.
+**Discord tasks:** Long-running work runs in isolated git worktrees (`/tmp/derek-tasks/<nonce>/`) on branches `task/<nonce>`. Tasks auto-merge to `dev` on success. See `source/discord/tasks/`.
 
 **Config resolution order:**
 1. `agents.config.json` in working directory
