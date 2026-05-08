@@ -565,6 +565,7 @@ const TOOL_VERBS: Record<string, string> = {
 	ask_user: 'Asking user',
 	task_start: 'Starting task',
 	task_status: 'Checking task',
+	task_output: 'Reading task output',
 	task_interrupt: 'Interrupting task',
 	task_continue: 'Continuing task',
 	task_wait: 'Waiting on task',

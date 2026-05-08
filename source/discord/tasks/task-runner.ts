@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type {
 	Client,
 	Message as DiscordJsMessage,
@@ -19,7 +20,11 @@ import {
 	MAX_CONCURRENT_TASKS_PER_CHANNEL,
 	type TaskRecord,
 } from './task-types.js';
-import {createWorktreeForTask, findRepoRoot} from './worktree-manager.js';
+import {
+	createWorktreeForTask,
+	findRepoRoot,
+	removeWorktreeForTask,
+} from './worktree-manager.js';
 
 /**
  * Base branch new task worktrees are cut from. Hardcoded for v1 — the
@@ -40,6 +45,7 @@ type Sendable = TextChannel | ThreadChannel;
 export const TASK_MANAGEMENT_TOOL_NAMES = [
 	'task_start',
 	'task_status',
+	'task_output',
 	'task_interrupt',
 	'task_continue',
 	'task_wait',
@@ -498,6 +504,26 @@ async function finalizeTask(
 	if (!updated) return;
 
 	await statusMessage.finalize(updated);
+
+	if (updated.worktreePath && updated.branch) {
+		void cleanupWorktree(updated).catch(err => {
+			console.warn(
+				`[task ${taskId}] worktree cleanup failed (non-fatal):`,
+				err instanceof Error ? err.message : String(err),
+			);
+		});
+	}
+}
+
+async function cleanupWorktree(task: TaskRecord): Promise<void> {
+	// task.worktreePath is /tmp/derek-tasks/<nonce> where the nonce came from
+	// freshWorktreeId() — distinct from task.id. Recover it via basename.
+	const worktreeNonce = path.basename(task.worktreePath);
+	const repoRoot = await findRepoRoot(task.worktreePath);
+	console.log(
+		`[task ${task.id}] removing worktree ${task.worktreePath} and branch ${task.branch}`,
+	);
+	await removeWorktreeForTask(worktreeNonce, repoRoot);
 }
 
 function summariseTool(

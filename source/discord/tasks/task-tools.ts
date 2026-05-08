@@ -331,9 +331,43 @@ function normaliseState(s: string): ChecklistState {
  * The gateway registers them all; `processMessage`'s `excludeTools` then
  * filters them per-call to enforce the main-channel / task-internal split.
  */
+// ─── task_output ─────────────────────────────────────────────────────────
+
+interface TaskOutputArgs {
+	taskId: string;
+}
+
+const taskOutputCoreTool = tool({
+	description:
+		'Fetch the complete activity log and full final response for a task — no truncation. Use when task_status does not give enough detail (e.g. task wrote a long plan or report you need to read in full). Returns all activity entries with timestamps, the full output text, and the git branch name.',
+	inputSchema: jsonSchema<TaskOutputArgs>({
+		type: 'object',
+		properties: {
+			taskId: {type: 'string', description: 'The id of the task to inspect.'},
+		},
+		required: ['taskId'],
+	}),
+	needsApproval: false,
+	execute: async (args: TaskOutputArgs): Promise<string> => {
+		const ctx = getTaskInvocationContext();
+		if (!ctx)
+			return 'Error: task_output can only be called from a Discord conversation.';
+		const task = taskStore.get(args.taskId);
+		if (!task) return `Error: task ${args.taskId} not found.`;
+		return renderTaskFullOutput(task);
+	},
+});
+
+export const taskOutputTool: NanocoderToolExport = {
+	name: 'task_output',
+	tool: taskOutputCoreTool,
+	readOnly: true,
+};
+
 export const allTaskTools: NanocoderToolExport[] = [
 	taskStartTool,
 	taskStatusTool,
+	taskOutputTool,
 	taskInterruptTool,
 	taskContinueTool,
 	taskWaitTool,
@@ -417,4 +451,41 @@ function renderTaskDetail(task: TaskRecord): string {
 function truncate(s: string, max: number): string {
 	if (s.length <= max) return s;
 	return `${s.slice(0, max)}…`;
+}
+
+function renderTaskFullOutput(task: TaskRecord): string {
+	const elapsed = task.endedAt
+		? formatElapsed(task.endedAt - task.startedAt)
+		: formatElapsed(Date.now() - task.startedAt);
+	const lines: string[] = [
+		`Task \`${task.id}\` — "${task.title}"`,
+		`Status: ${statusEmoji(task.status)} ${task.status} · ${elapsed} · ${task.toolCallCount} tool calls`,
+		`Branch: ${task.branch ?? '(none)'}`,
+	];
+	if (task.error) lines.push(`Error: ${task.error}`);
+	if (task.checklist.length > 0) {
+		lines.push('', 'Checklist:');
+		for (const item of task.checklist) {
+			const g =
+				item.state === 'done'
+					? '✓'
+					: item.state === 'doing'
+						? '▸'
+						: item.state === 'skipped'
+							? '↷'
+							: '○';
+			lines.push(`  ${g} ${item.label}`);
+		}
+	}
+	if (task.activity.length > 0) {
+		lines.push('', `Activity log (${task.activity.length} entries):`);
+		for (const entry of task.activity) {
+			const delta = formatElapsed(entry.timestampMs - task.startedAt);
+			lines.push(`  [${delta}] ${entry.kind}: ${entry.summary}`);
+		}
+	}
+	if (task.lastResponse) {
+		lines.push('', 'Full output:', task.lastResponse);
+	}
+	return lines.join('\n');
 }
