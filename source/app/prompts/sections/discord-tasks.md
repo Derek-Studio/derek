@@ -72,7 +72,7 @@ Use `git add <specific-files>` rather than `git add .` to avoid staging unrelate
 When your work is complete:
 
 1. Commit any remaining changes
-2. **Auto-merge to `dev` by default** — unless the task prompt contains "don't merge", "no merge", or "review first", or the project's AGENTS.md contains a `NO_AUTO_MERGE` directive
+2. **Auto-merge to `dev` by default** — unless the task prompt contains "don't merge", "no merge", or "review first", or the project's AGENTS.md contains a `NO_AUTO_MERGE` directive. If the project has a test command (check package.json or AGENTS.md), run it first and only merge if tests pass. If tests fail, commit the work, report the failures, and skip the merge.
 
 To merge, find the worktree that has `dev` checked out, then merge and push:
 ```bash
