@@ -1,142 +1,142 @@
-# AGENTS.md
+# AGENTS.md — Derek (Dev Worktree)
 
-AI coding agent instructions for **@nanocollective/nanocoder**
+AI context for the **Derek** project — dev/staging worktree. Loaded at runtime by the dev bot.
 
-## Project Overview
+This worktree (`/root/projects/derek-dev`, branch `feat/task-worktrees-v2`) is the staging environment for self-modification. Changes are tested here before being merged to production (`/root/projects/derek`, branch `dev`).
 
-A local-first CLI coding agent that brings the power of agentic coding tools like Claude Code and Gemini CLI to local models or controlled APIs like OpenRouter
+## What This Project Is
 
-**Project Type:** React Web Application
-**Primary Language:** TypeScript (99% of codebase)
+Derek is a persistent AI coding agent that runs as:
+- A **Discord bot** — always-on, channel-aware, supports parallel background tasks
+- An interactive **CLI tool** — same agent, terminal interface
 
-## Architecture
+Built on [Nano Collective's nanocoder](https://github.com/Nano-Collective/nanocoder), maintained at [Derek-Studio/derek](https://github.com/Derek-Studio/derek).
 
-**Key Frameworks & Libraries:**
-- React (^19.0.0) - web
-
-**Project Structure:**
-- `assets/` - Static assets
-- `docs/` - Documentation
-- `source/` - Source code
-- `.github/assets/` - Static assets
-- `docs/configuration/` - Project files
-- `docs/features/` - Project files
-- `docs/getting-started/` - Project files
-- `source/ai-sdk-client/` - Project files
-- `source/app/` - Application code
-- `source/auth/` - Project files
-- `source/commands/` - Project files
-- `source/components/` - React/UI components
-- `source/config/` - Configuration files
-- `source/context/` - Project files
-- `source/custom-commands/` - Project files
-- `source/hooks/` - Project files
-- `source/init/` - Project files
-- `source/lsp/` - Project files
-- `source/markdown-parser/` - Project files
-- `source/mcp/` - Project files
-
-## Key Files
-
-**Configuration:**
-- `package.json` - Node.js dependencies and scripts
-- `plugins/vscode/package.json` - Node.js dependencies and scripts
-- `pnpm-lock.yaml` - Configuration file
-
-**Documentation:**
-- `.devcontainer/README.md`
-- `.github/ISSUE_TEMPLATE/bug_report.md`
-- `.github/ISSUE_TEMPLATE/feature_request.md`
-
-## Development Commands
-
-**Build:**
-```bash
-npm run build
-```
-
-**Development:**
-```bash
-npm run dev
-```
-
-**Start:**
-```bash
-npm run start
-```
-
-## Code Style Guidelines
-
-- Use camelCase for variables and functions
-- Use PascalCase for classes and components
-- Prefer const/let over var
-- Use async/await over callbacks when possible
-- Use functional components with hooks
-- Follow React naming conventions for components
-
-## Testing
-
-**Test Files:**
-- `.nanocoder/commands/test.md`
-- `scripts/test-copilot.sh`
-- `scripts/test.sh`
-- `source/ai-sdk-client/ai-sdk-client.spec.ts`
-- `source/ai-sdk-client/chat/chat-handler.spec.ts`
-
-## Existing Project Guidelines
-
-*The following guidelines were found in existing AI configuration files:*
-
-### AI Agent Guidelines
-**From CLAUDE.md:**
-# Build and run
-pnpm run build          # Compile TypeScript to dist/ with executable permissions
-pnpm run start          # Run the compiled application
-pnpm run dev            # Watch mode compilation (tsc --watch)
-
-# Testing (run before committing)
-pnpm run test:all       # Full suite: format, lint, types, AVA tests, knip
-
-## Project Overview
-Nanocoder is a React-based CLI coding agent built with Ink.js that provides local-first AI assistance with multiple provider support (Ollama, OpenRouter, any OpenAI-compatible API).
-
-**Entry point**: `source/cli.tsx` → Ink render of `App` from `source/app.tsx`
-
-### State Management Pattern
-All state lives in `useAppState.tsx`. Other hooks (`useChatHandler`, `useToolHandler`, `useModeHandlers`) receive state and setters from it. `App.tsx` orchestrates these hooks together. Global `message-queue.ts` allows deep components to add chat messages.
-
-### LLM Client Architecture
-`client-factory.ts` creates clients via `createLLMClient(provider?)`. Uses Vercel AI SDK with `createOpenAICompatible` for any OpenAI-compatible API. Supports streaming responses and tool calling.
-
-## Code Style
-- **TypeScript strict mode** with `@/*` path alias mapping to `source/*`
-- **Biome** for formatting (tabs, single quotes, semicolons, trailing commas)
-- **Key lint rules**: `useExhaustiveDependencies: error`, `noUnusedVariables: error`, `noUnusedImports: error`
-- **React 19** with Ink.js for CLI rendering
-
-## Testing
-- **Framework**: AVA with tsx loader
-- **Location**: `source/**/*.spec.ts` files alongside source
-- **Serial execution**: Tests run one at a time
-- **Run single test**: `pnpm run test:ava source/path/to/file.spec.ts`
-
-
-## AI Coding Assistance Notes
-
-**Important Considerations:**
-- Check package.json for available scripts before running commands
-- Be aware of Node.js version requirements
-- Consider impact on bundle size when adding dependencies
-- Follow React hooks best practices
-- Consider component reusability when creating new components
-- Project has 766 files across 97 directories
-- Large codebase: Focus on specific areas when making changes
-- Check build configuration files before making structural changes
-
-## Repository
-
-**Source:** https://github.com/Nano-Collective/nanocoder.git
+**Stack:** TypeScript, React 19, Ink.js (CLI), discord.js v14, Vercel AI SDK, pnpm
 
 ---
 
-*This AGENTS.md file was generated by Nanocoder. Update it as your project evolves.*
+## Two-Worktree Setup
+
+| Worktree | Path | Branch | Service | Discord channel |
+|---|---|---|---|---|
+| Production | `/root/projects/derek` | `dev` | `derek-discord` | `#derek` |
+| Dev/staging | `/root/projects/derek-dev` | `feat/task-worktrees-v2` | `derek-dev-discord` | `#derek-test` |
+
+Both share one git repo (`git worktree list` to verify). Never manually copy files between them — use git to merge branches.
+
+**Shared config:** `/root/.config/derek/` (channels.json, .env for prod)
+**Dev config:** `/root/.config/derek-dev/` (.env with separate bot token)
+
+---
+
+## Deploying
+
+Always use the safe deploy script — never restart the service directly:
+
+```bash
+pnpm run deploy
+```
+
+`scripts/safe-deploy.sh` does:
+1. Backs up `dist/` → `dist.bak/`
+2. Builds (`tsc && tsc-alias`)
+3. Restarts `derek-dev-discord`
+4. Watches for 15s — if the service crashes, auto-restores `dist.bak/` and brings the old version back
+5. If build fails, the service is never restarted
+
+---
+
+## Self-Modification Protocol
+
+This is the staging worktree — all self-mod work happens here first.
+
+1. **Create a branch** off the current branch:
+   ```bash
+   git checkout -b self-mod/YYYY-MM-DD-description
+   ```
+
+2. **Type-check after each file edit:**
+   ```bash
+   pnpm run test:types
+   ```
+
+3. **Run the full suite before deploying:**
+   ```bash
+   pnpm run test:all
+   ```
+
+4. **Deploy to the dev bot** (safe deploy, auto-rollback on crash):
+   ```bash
+   pnpm run deploy
+   ```
+
+5. **Test via `#derek-test`** in Discord — the dev bot runs from this worktree.
+
+6. **When satisfied, notify the user** with the branch name. Do NOT merge to `dev` yourself. The user will merge and run `pnpm run deploy` in `/root/projects/derek` to promote to production.
+
+---
+
+## Development Commands
+
+```bash
+pnpm run build              # Compile TypeScript → dist/
+pnpm run deploy             # Safe deploy with auto-rollback
+pnpm run test:all           # Full suite
+pnpm run test:types         # TypeScript only (fast, run after each edit)
+pnpm run test:ava           # Unit tests only
+pnpm run test:ava source/path/to/file.spec.ts
+pnpm run test:lint:fix      # Auto-fix lint/format issues
+pnpm run dev                # tsc --watch
+```
+
+---
+
+## Repo Layout
+
+```
+source/
+  app/               # App entry, state, prompts, system prompt sections
+  discord/           # Discord bot: gateway, tasks, session, UI
+    tasks/           # Task system — includes worktree-manager.ts (this branch)
+  tools/             # Built-in tools (file ops, bash, search, git, web)
+  commands/          # CLI slash commands
+  ai-sdk-client/     # LLM client, chat handler, streaming
+  config/            # Config loading, theme
+  mcp/               # MCP server integration
+  hooks/             # React hooks
+  components/        # Ink UI components
+scripts/
+  safe-deploy.sh     # Build + restart with auto-rollback
+source/app/prompts/sections/   # System prompt markdown sections
+```
+
+---
+
+## What's Different on This Branch
+
+`feat/task-worktrees-v2` adds git worktree isolation for parallel Discord tasks:
+
+- `source/discord/tasks/worktree-manager.ts` — creates/removes per-task git worktrees at `/tmp/derek-tasks/<taskId>/`
+- `source/discord/tasks/tool-cwd-context.ts` — threads cwd through AsyncLocalStorage so all tools resolve against the task's worktree, not `process.cwd()`
+- Modified: `task-runner.ts`, `task-store.ts`, `task-types.ts`, `headless-runtime.ts`, `gateway.ts`
+
+Each `/task` started in Discord gets its own isolated branch and worktree — parallel tasks can't step on each other's files.
+
+---
+
+## Code Style
+
+- **Formatter/linter:** Biome (tabs, single quotes, semicolons, trailing commas)
+- **TypeScript strict mode** with `@/*` → `source/*` path alias
+- **No unused variables or imports**
+- Pre-commit hook runs lint-staged on every commit
+
+---
+
+## Testing
+
+- **Framework:** AVA with tsx loader
+- **Location:** `source/**/*.spec.ts` alongside source files
+- **Serial execution**, 80% line coverage threshold
+- Note: Discord layer (`source/discord/`) currently has no test coverage
