@@ -84,6 +84,8 @@ git -C <dev-worktree-path> merge --no-ff task/<id> -m "Merge task/<id>: <title>"
 git -C <dev-worktree-path> push origin dev
 ```
 
+`GITHUB_TOKEN` is available in the environment and the global git credential helper is configured to use it — `git push` should authenticate automatically. If a push fails with an auth error, check that `GITHUB_TOKEN` is set (`echo $GITHUB_TOKEN`).
+
 Your **final response must include**:
 1. A summary of what was done
 2. Whether the branch was merged (and any conflicts), or why it was skipped
