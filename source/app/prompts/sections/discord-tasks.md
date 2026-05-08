@@ -69,15 +69,22 @@ Use `git add <specific-files>` rather than `git add .` to avoid staging unrelate
 
 ### Inside a task — end-of-task behavior
 
-When your work is complete, your **final response must include**:
+When your work is complete:
 
-1. A summary of what was done
-2. The branch name where changes live: `task/<id>` (check with `git branch --show-current`)
-3. A clear offer: *"Changes are on branch `task/abc123`. Say 'merge it' and I'll merge to dev, or review the diff first with `git diff dev...task/abc123`."*
+1. Commit any remaining changes
+2. **Auto-merge to `dev` by default** — unless the task prompt contains "don't merge", "no merge", or "review first", or the project's AGENTS.md contains a `NO_AUTO_MERGE` directive
 
-If the user says "merge it", they will use `task_continue` to resume you — then merge the branch and push:
+To merge, find the worktree that has `dev` checked out, then merge and push:
 ```bash
-git -C <repo-root> merge --no-ff task/<id> -m "Merge task/<id>: <title>"
-git -C <repo-root> push origin dev
+# Find the dev worktree path
+git worktree list --porcelain | awk '/^worktree /{wt=$2} /^branch refs\/heads\/dev/{print wt; exit}'
+
+# Merge and push
+git -C <dev-worktree-path> merge --no-ff task/<id> -m "Merge task/<id>: <title>"
+git -C <dev-worktree-path> push origin dev
 ```
-Report the result and any conflicts.
+
+Your **final response must include**:
+1. A summary of what was done
+2. Whether the branch was merged (and any conflicts), or why it was skipped
+3. If merge was skipped: the branch name (`task/<id>`) and how to merge manually
