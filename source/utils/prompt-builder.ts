@@ -105,10 +105,9 @@ Current Date: ${dateStr}`;
 function appendProjectContext(prompt: string): string {
 	const cwd = process.cwd();
 	const files: Array<{name: string; heading: string}> = [
-		{name: 'AGENT.md', heading: 'Project Instructions'},
-		{name: 'AGENTS.md', heading: 'Project Instructions'},
-		{name: 'VISION.md', heading: 'Project Vision'},
-		{name: 'TODO.md', heading: 'Current TODO'},
+		{name: 'AGENTS.md', heading: 'Project Instructions (AGENTS.md)'},
+		{name: 'VISION.md', heading: 'Project Vision (VISION.md)'},
+		{name: 'TODO.md', heading: 'Current TODO (TODO.md)'},
 	];
 
 	let extra = '';
