@@ -111,10 +111,15 @@ export async function handleChat(
 	});
 
 	return await withNewCorrelationContext(async _context => {
+		// Hoisted so the catch block can include them in diagnostic output.
+		let capturedStreamingError: Error | undefined;
+		let aiTools: Record<string, AISDKCoreTool> | undefined;
+		let modelMessages: ReturnType<typeof convertToModelMessages> = [];
+
 		try {
 			// Tools arrive with approval policy already resolved by ToolManager.
 			// No approval mutation needed here — chat handler is a pure SDK caller.
-			const aiTools = shouldDisableTools
+			aiTools = shouldDisableTools
 				? undefined
 				: Object.keys(tools).length > 0
 					? tools
@@ -124,7 +129,7 @@ export async function handleChat(
 			// when native tools are disabled (handled upstream in useChatHandler).
 
 			// Convert messages to AI SDK v5 ModelMessage format
-			const modelMessages = convertToModelMessages(messages);
+			modelMessages = convertToModelMessages(messages);
 
 			// Log exactly what we're sending so failures are diagnosable
 			const lastMsg = modelMessages[modelMessages.length - 1];
@@ -196,6 +201,9 @@ export async function handleChat(
 					// Catch streaming errors so raw SSE events don't leak to stdout.
 					// The error will still be thrown by the stream and caught by
 					// the outer try-catch for proper formatting.
+					if (error instanceof Error) {
+						capturedStreamingError = error;
+					}
 					const isApiErr = APICallError.isInstance(error);
 					logger.error('Streaming error received', {
 						correlationId,
@@ -441,13 +449,66 @@ export async function handleChat(
 					// Model returned empty response without cancellation — dump everything useful
 					const errName = error instanceof Error ? error.name : 'unknown';
 					const errMsg = error instanceof Error ? error.message : String(error);
+
+					// Unwind the full cause chain
+					const causeLines: string[] = [];
+					let cause: unknown = error.cause;
+					while (cause !== undefined && cause !== null) {
+						causeLines.push(
+							cause instanceof Error
+								? `  ${cause.name}: ${cause.message}`
+								: `  ${String(cause)}`,
+						);
+						cause = cause instanceof Error ? cause.cause : undefined;
+					}
 					const causeStr =
-						error instanceof Error && error.cause
-							? ` | cause: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`
+						causeLines.length > 0
+							? `\nCause chain:\n${causeLines.join('\n')}`
 							: '';
+
+					// Include streaming error if captured before the NoOutputGeneratedError
+					const streamErrStr = capturedStreamingError
+						? `\nStreaming error: ${capturedStreamingError.name}: ${capturedStreamingError.message}` +
+							(capturedStreamingError.cause
+								? ` (cause: ${capturedStreamingError.cause instanceof Error ? capturedStreamingError.cause.message : String(capturedStreamingError.cause)})`
+								: '') +
+							(APICallError.isInstance(capturedStreamingError) &&
+							capturedStreamingError.responseBody
+								? `\nResponse body: ${capturedStreamingError.responseBody.slice(0, 500)}`
+								: '') +
+							(APICallError.isInstance(capturedStreamingError) &&
+							capturedStreamingError.statusCode
+								? `\nHTTP status: ${capturedStreamingError.statusCode}`
+								: '')
+						: '';
+
+					// Context stats help diagnose context-window overflow
+					const totalChars = modelMessages.reduce((sum, m) => {
+						const c = m.content;
+						if (typeof c === 'string') return sum + c.length;
+						if (Array.isArray(c))
+							return (
+								sum +
+								c.reduce(
+									(s, p) =>
+										s +
+										(typeof p === 'object' && p !== null && 'text' in p
+											? String(p.text).length
+											: 0),
+									0,
+								)
+							);
+						return sum;
+					}, 0);
+					const estTokens = Math.round(totalChars / 4);
+					const contextStr = `\nContext: ${modelMessages.length} messages, ${Object.keys(aiTools ?? {}).length} tools, ~${estTokens.toLocaleString()} est. tokens`;
+
 					throw new Error(
 						`Empty response from ${providerConfig.name}/${currentModel} [${errName}]` +
-							`\nSDK message: ${errMsg}${causeStr}` +
+							`\nSDK message: ${errMsg}` +
+							causeStr +
+							streamErrStr +
+							contextStr +
 							`\nCorrelation ID: ${correlationId}` +
 							`\nModel returned no text and no tool calls (stop reason without output).` +
 							` Try: check provider logs, reduce context length, or switch model.`,
