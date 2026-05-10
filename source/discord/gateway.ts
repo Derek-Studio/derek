@@ -8,6 +8,7 @@ import {
 	type TextChannel,
 	type ThreadChannel,
 } from 'discord.js';
+import {withChannelContext} from '@/secrets/active-context.js';
 import type {MessageImagePart} from '@/types/core';
 import {type ProcessedAttachments, processAttachments} from './attachments.js';
 import type {HeadlessRuntime} from './runtime/headless-runtime.js';
@@ -449,47 +450,51 @@ async function runAgentTurn(args: RunAgentTurnArgs): Promise<void> {
 		: userContent;
 
 	try {
-		const result = await withTaskInvocationContext(
-			{
-				parentChannelId: channelId,
-				parentGuildId: guildId,
-				parentTriggerMessage: triggerMessage,
-			},
+		const result = await withChannelContext(
+			{channelId, workingDirectory: workingDir, signal},
 			() =>
-				runtime.processMessage(
-					messages,
-					effectiveUserContent,
-					session.mode,
+				withTaskInvocationContext(
 					{
-						onToken: (token: string) => {
-							streamBuffer += token;
-							if (lastStatusPhase !== 'thinking') {
-								lastStatusPhase = 'thinking';
-								void statusLine.update('🔄 Thinking…');
-							}
-						},
-						onToolApproval: async toolCall => {
-							lastStatusPhase = 'approval';
-							void statusLine.update(
-								`⏸ Waiting for approval on \`${toolCall.function.name}\`…`,
-							);
-							return requestToolApproval(sendableChannel, toolCall);
-						},
-						onToolStart: async (toolName, toolArgs) => {
-							liveToolCount++;
-							lastStatusPhase = 'tool';
-							void statusLine.update(
-								`🔄 ${formatToolStatus(toolName, toolArgs, liveToolCount)}`,
-							);
-						},
-						onToolResult: async () => {},
+						parentChannelId: channelId,
+						parentGuildId: guildId,
+						parentTriggerMessage: triggerMessage,
 					},
-					signal,
-					imageParts.length > 0 ? imageParts : undefined,
-					{
-						excludeTools: MAIN_CHANNEL_EXCLUDED_TOOLS,
-						cwd: workingDir,
-					},
+					() =>
+						runtime.processMessage(
+							messages,
+							effectiveUserContent,
+							session.mode,
+							{
+								onToken: (token: string) => {
+									streamBuffer += token;
+									if (lastStatusPhase !== 'thinking') {
+										lastStatusPhase = 'thinking';
+										void statusLine.update('🔄 Thinking…');
+									}
+								},
+								onToolApproval: async toolCall => {
+									lastStatusPhase = 'approval';
+									void statusLine.update(
+										`⏸ Waiting for approval on \`${toolCall.function.name}\`…`,
+									);
+									return requestToolApproval(sendableChannel, toolCall);
+								},
+								onToolStart: async (toolName, toolArgs) => {
+									liveToolCount++;
+									lastStatusPhase = 'tool';
+									void statusLine.update(
+										`🔄 ${formatToolStatus(toolName, toolArgs, liveToolCount)}`,
+									);
+								},
+								onToolResult: async () => {},
+							},
+							signal,
+							imageParts.length > 0 ? imageParts : undefined,
+							{
+								excludeTools: MAIN_CHANNEL_EXCLUDED_TOOLS,
+								cwd: workingDir,
+							},
+						),
 				),
 		);
 

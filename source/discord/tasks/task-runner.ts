@@ -5,6 +5,7 @@ import type {
 	TextChannel,
 	ThreadChannel,
 } from 'discord.js';
+import {withChannelContext} from '@/secrets/active-context.js';
 import type {Message} from '@/types/core';
 import type {HeadlessRuntime} from '../runtime/headless-runtime.js';
 import {
@@ -384,63 +385,74 @@ async function driveTask(
 	);
 
 	try {
-		const result = await withCurrentTask(taskId, () =>
-			runtime.processMessage(
-				history,
-				prompt,
-				'auto-accept', // tasks never block on approval prompts
-				{
-					// Tasks do not stream reasoning into Discord any more.
-					// (Tokens still accumulate in the runtime's own buffer so
-					// the final response is returned on completion.)
-					onToken: () => {},
-					// Should never be called in auto-accept mode, but default
-					// to approve just in case.
-					onToolApproval: async () => 'approve',
-					onToolStart: (toolName: string, args: Record<string, unknown>) => {
-						void taskStore.incrementToolCount(taskId);
-						void taskStore.appendActivity(taskId, {
-							timestampMs: Date.now(),
-							kind: 'tool',
-							summary: summariseTool(toolName, args),
-						});
-						// Trigger a status-message re-render so the tool count
-						// and any refreshed checklist are visible.
-						const t = taskStore.get(taskId);
-						if (t) statusMessage.updateTask(t);
-					},
-					onToolResult: (
-						toolName: string,
-						output: string,
-						isError: boolean,
-					) => {
-						if (isError) {
-							void taskStore.appendActivity(taskId, {
-								timestampMs: Date.now(),
-								kind: 'error',
-								summary: `${toolName}: ${truncate(output, 180)}`,
-							});
-						}
-					},
-				},
+		const result = await withChannelContext(
+			{
+				channelId: task.parentChannelId,
+				workingDirectory: task.workingDirectory,
 				signal,
-				undefined,
-				{
-					excludeTools: TASK_MANAGEMENT_TOOL_NAMES,
-					skipUserMessage,
-					// Tasks do long agentic chains — refactors, multi-file
-					// edits, build loops. The default 25-turn cap is far
-					// too tight. Give tasks plenty of room; the
-					// finalisation-nudge guards in the runtime prevent
-					// runaway loops regardless.
-					maxTurns: 250,
-					// Run all tools — file edits, bash, git — against this
-					// task's own git worktree, isolating its edits from
-					// the running bot's checkout and from every other
-					// concurrent task.
-					cwd: task.workingDirectory,
-				},
-			),
+			},
+			() =>
+				withCurrentTask(taskId, () =>
+					runtime.processMessage(
+						history,
+						prompt,
+						'auto-accept', // tasks never block on approval prompts
+						{
+							// Tasks do not stream reasoning into Discord any more.
+							// (Tokens still accumulate in the runtime's own buffer so
+							// the final response is returned on completion.)
+							onToken: () => {},
+							// Should never be called in auto-accept mode, but default
+							// to approve just in case.
+							onToolApproval: async () => 'approve',
+							onToolStart: (
+								toolName: string,
+								args: Record<string, unknown>,
+							) => {
+								void taskStore.incrementToolCount(taskId);
+								void taskStore.appendActivity(taskId, {
+									timestampMs: Date.now(),
+									kind: 'tool',
+									summary: summariseTool(toolName, args),
+								});
+								// Trigger a status-message re-render so the tool count
+								// and any refreshed checklist are visible.
+								const t = taskStore.get(taskId);
+								if (t) statusMessage.updateTask(t);
+							},
+							onToolResult: (
+								toolName: string,
+								output: string,
+								isError: boolean,
+							) => {
+								if (isError) {
+									void taskStore.appendActivity(taskId, {
+										timestampMs: Date.now(),
+										kind: 'error',
+										summary: `${toolName}: ${truncate(output, 180)}`,
+									});
+								}
+							},
+						},
+						signal,
+						undefined,
+						{
+							excludeTools: TASK_MANAGEMENT_TOOL_NAMES,
+							skipUserMessage,
+							// Tasks do long agentic chains — refactors, multi-file
+							// edits, build loops. The default 25-turn cap is far
+							// too tight. Give tasks plenty of room; the
+							// finalisation-nudge guards in the runtime prevent
+							// runaway loops regardless.
+							maxTurns: 250,
+							// Run all tools — file edits, bash, git — against this
+							// task's own git worktree, isolating its edits from
+							// the running bot's checkout and from every other
+							// concurrent task.
+							cwd: task.workingDirectory,
+						},
+					),
+				),
 		);
 
 		// Persist the full history.
