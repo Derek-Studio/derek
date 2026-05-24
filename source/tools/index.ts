@@ -12,6 +12,7 @@ import {getDiagnosticsTool} from '@/tools/lsp-get-diagnostics';
 import {readFileTool} from '@/tools/read-file';
 import {requestSecretTool} from '@/tools/request-secret';
 import {searchFileContentsTool} from '@/tools/search-file-contents';
+import {shareEnvVarTool} from '@/tools/share-env-var';
 import {
 	createTaskTool,
 	deleteTaskTool,
@@ -37,6 +38,7 @@ const staticTools: NanocoderToolExport[] = [
 	// Interaction tools
 	askQuestionTool,
 	requestSecretTool,
+	shareEnvVarTool,
 	// File operation tools
 	...getFileOpTools(),
 	// Task management tools

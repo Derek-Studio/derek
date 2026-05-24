@@ -3,8 +3,9 @@ import {
 	type SecretDispatchRequest,
 	setSecretDispatchHandler,
 } from '@/secrets/dispatcher';
-import {createSecretLink} from '@/secrets/http-server';
+import {createSecretLink, createShareLink} from '@/secrets/http-server';
 import {pendingSecretStore} from '@/secrets/pending-store';
+import {setShareDispatchHandler} from '@/secrets/share-dispatcher';
 import {registerCommands} from './commands/registry.js';
 import {loadDiscordConfig} from './config.js';
 import {setupGatewayHandlers} from './gateway.js';
@@ -121,6 +122,30 @@ export async function startDiscordBot(opts?: {
 				}
 			})();
 		});
+	});
+
+	// Register the HTTP one-time-link share handler
+	setShareDispatchHandler(async request => {
+		try {
+			const url = await createShareLink(request);
+			const channel = await client.channels
+				.fetch(request.channelId)
+				.catch(() => null);
+			if (channel && 'send' in channel) {
+				const expiresMin = Math.round(
+					(request.ttlMs ?? 5 * 60 * 1000) / 60_000,
+				);
+				await (channel as import('discord.js').TextChannel).send(
+					`🔗 **\`${request.key}\`** is ready to view\n` +
+						`**[Click here to view it securely](${url})**\n` +
+						`*(single-use link — expires in ${expiresMin} min — value goes directly to your browser, not through Discord)*`,
+				);
+			}
+			return {status: 'posted', url};
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return {status: 'error', reason};
+		}
 	});
 
 	// Setup event handlers

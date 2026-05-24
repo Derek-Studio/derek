@@ -3,6 +3,7 @@ import {createServer, type Server} from 'node:http';
 import type {SecretDispatchRequest} from './dispatcher.js';
 import {writeSecret, writeSecretFile} from './env-writer.js';
 import {pendingSecretStore, type SecretResolution} from './pending-store.js';
+import type {ShareDispatchRequest} from './share-dispatcher.js';
 
 /**
  * One-time HTTPS-free secret intake server.
@@ -23,7 +24,13 @@ interface PendingLink {
 	key: string;
 }
 
+interface ShareLink {
+	key: string;
+	value: string;
+}
+
 const tokenMap = new Map<string, PendingLink>();
+const shareTokenMap = new Map<string, ShareLink>();
 
 let server: Server | null = null;
 let listeningPort: number | null = null;
@@ -98,6 +105,29 @@ ${opts.error ? `<div class="err">❌ ${escapeHtml(opts.error)}</div>` : ''}
 </body></html>`;
 }
 
+function shareHtmlPage(key: string, value: string): string {
+	return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>${escapeHtml(key)}</title>
+<style>body{font-family:system-ui;max-width:560px;margin:80px auto;padding:0 20px;background:#0d1117;color:#e6edf3}
+h2{margin-bottom:4px}p.sub{color:#8b949e;margin-top:4px;font-size:14px}
+pre{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:16px;
+  font-family:monospace;font-size:14px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;
+  color:#e6edf3;margin:0;user-select:all}
+button{margin-top:12px;background:#1f6feb;border:none;border-radius:6px;color:#fff;
+  padding:10px 20px;font-size:15px;cursor:pointer;width:100%}
+button:hover{background:#388bfd}
+button.copied{background:#238636}
+.note{font-size:12px;color:#8b949e;margin-top:12px}
+</style></head>
+<body>
+<h2>🔗 Env var value</h2>
+<p class="sub">Key: <code>${escapeHtml(key)}</code></p>
+<pre id="val">${escapeHtml(value)}</pre>
+<button id="btn" onclick="navigator.clipboard.writeText(document.getElementById('val').textContent).then(()=>{this.textContent='✅ Copied!';this.className='copied';setTimeout(()=>{this.textContent='Copy to clipboard';this.className=''},2000)})">Copy to clipboard</button>
+<p class="note">This link is single-use — it has now been consumed and will return 404 if opened again.</p>
+</body></html>`;
+}
+
 function escapeHtml(s: string): string {
 	return s
 		.replace(/&/g, '&amp;')
@@ -133,6 +163,14 @@ export function startSecretServer(): Promise<number> {
 			const token = url.startsWith('/') ? url.slice(1).split('?')[0] : '';
 
 			if (req.method === 'GET') {
+				const shareLink = shareTokenMap.get(token);
+				if (shareLink) {
+					shareTokenMap.delete(token);
+					res.writeHead(200, {'Content-Type': 'text/html'});
+					res.end(shareHtmlPage(shareLink.key, shareLink.value));
+					return;
+				}
+
 				const link = tokenMap.get(token);
 				if (!link) {
 					res.writeHead(404, {'Content-Type': 'text/html'});
@@ -226,13 +264,31 @@ export function startSecretServer(): Promise<number> {
 
 		const port = Number(process.env.DEREK_SECRET_PORT ?? 0);
 		server.listen(port, '0.0.0.0', () => {
-			const addr = server!.address();
+			const addr = server?.address();
 			listeningPort =
 				typeof addr === 'object' && addr !== null ? addr.port : port;
 			resolve(listeningPort);
 		});
 		server.on('error', reject);
 	});
+}
+
+/**
+ * Build and register a one-time share link that displays an env var value.
+ * Token is consumed (deleted) on first GET — single-use.
+ */
+export async function createShareLink(
+	request: ShareDispatchRequest,
+): Promise<string> {
+	const port = await startSecretServer();
+	const base =
+		process.env.DEREK_SECRET_URL_BASE?.replace(/\/$/, '') ??
+		`http://localhost:${port}`;
+	const token = randomBytes(32).toString('hex');
+	shareTokenMap.set(token, {key: request.key, value: request.value});
+	const ttlMs = request.ttlMs ?? 5 * 60 * 1000;
+	setTimeout(() => shareTokenMap.delete(token), ttlMs);
+	return `${base}/${token}`;
 }
 
 /**
