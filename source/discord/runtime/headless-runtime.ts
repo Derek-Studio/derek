@@ -381,16 +381,18 @@ export class HeadlessRuntime {
 			//    items, the model is finalising prematurely. Nudge it to
 			//    update the checklist or continue working.
 			//
-			// Both guards re-prompt by appending a system message and
+			// Both guards re-prompt by appending a user message and
 			// `continue`-ing the loop, capped at MAX_FINALISATION_NUDGES
 			// total so a misbehaving model can't trap the loop forever.
+			// NOTE: Must use role:'user' not role:'system' — Anthropic rejects
+			// system messages that appear after user/assistant turns.
 			if (effectiveToolCalls.length === 0) {
 				const text = cleanContent.trim();
 
 				if (text.length === 0 && finalisationNudges < MAX_FINALISATION_NUDGES) {
 					finalisationNudges++;
 					messages.push({
-						role: 'system',
+						role: 'user',
 						content:
 							'You returned no tool calls and no text. ' +
 							'If your work is complete, respond with the final answer. ' +
@@ -413,7 +415,7 @@ export class HeadlessRuntime {
 							.map(i => `- ${i.label} (${i.state})`)
 							.join('\n');
 						messages.push({
-							role: 'system',
+							role: 'user',
 							content:
 								`You appear to be ending the task, but your checklist still has ${open.length} unfinished item(s):\n${labels}\n\n` +
 								'If those items are actually done, call task_checklist to update their state to "done" or "skipped" and then respond with your final summary. ' +
